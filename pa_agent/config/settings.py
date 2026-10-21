@@ -5,7 +5,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DecisionStance = Literal["conservative", "balanced", "aggressive", "extreme_aggressive"]
-DataSourceKind = Literal["mt5", "tradingview", "akshare", "eastmoney", "eastmoney_futures", "tushare"]
+DataSourceKind = Literal[
+    "mt5", "tradingview", "akshare", "eastmoney", "eastmoney_futures", "tushare", "yfinance", "okx"
+]
 NormalizationMode = Literal["strict", "lenient"]
 
 
@@ -98,8 +100,6 @@ class GeneralSettings(BaseModel):
     @field_validator("last_data_source", mode="before")
     @classmethod
     def _coerce_legacy_data_source(cls, v: object) -> object:
-        if v == "yfinance":
-            return "eastmoney"
         if v in ("adata", "a_share"):
             return "akshare"
         if v == "eastmoney":
@@ -154,6 +154,49 @@ class PushPlusSettings(BaseModel):
     token: str = ""
 
 
+class TradingSettings(BaseModel):
+    """Automated execution on OKX perpetual swaps (see pa_agent/trading)."""
+    model_config = ConfigDict(extra="ignore")
+
+    #: Master switch — when False the GUI / headless runner do not emit signals.
+    enabled: bool = False
+    #: True = OKX 模拟盘 (requires a demo-trading API key). Live needs explicit False.
+    demo: bool = True
+    okx_api_key: str = ""
+    okx_secret_key: str = ""
+    okx_passphrase: str = ""
+    #: OKX margin mode for swaps: isolated / cross
+    margin_mode: Literal["isolated", "cross"] = "isolated"
+    leverage: int = Field(default=5, ge=1, le=50)
+    #: Fraction of account equity risked per trade (entry→stop distance).
+    risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10)
+    #: Stop opening new positions once today's realised loss exceeds this % of equity.
+    max_daily_loss_pct: float = Field(default=3.0, gt=0, le=50)
+    max_open_positions: int = Field(default=1, ge=1, le=20)
+    #: Reject signals whose (TP1 - entry) / (entry - SL) is below this.
+    min_reward_risk: float = Field(default=1.0, ge=0)
+    #: Reject signals with trade_confidence below this (0 = no gate).
+    min_trade_confidence: int = Field(default=0, ge=0, le=100)
+    #: Stop distance sanity band as % of entry price.
+    min_stop_distance_pct: float = Field(default=0.05, ge=0)
+    max_stop_distance_pct: float = Field(default=8.0, gt=0)
+    #: Cancel an unfilled limit / breakout entry after this many bars.
+    pending_expiry_bars: int = Field(default=3, ge=1, le=100)
+    #: Fraction of the position closed at TP1 (rest at TP2). 1.0 = all at TP1.
+    tp1_close_fraction: float = Field(default=0.5, gt=0, le=1)
+    #: After TP1 fills, move the stop on the remainder to the entry price.
+    move_stop_to_breakeven: bool = True
+    #: Breakout (突破单) entry: "trigger" = OKX 条件单; "watch" = executor polls price.
+    breakout_mode: Literal["trigger", "watch"] = "trigger"
+    #: Executor polling interval.
+    poll_interval_s: float = Field(default=3.0, ge=1, le=60)
+    #: Dashboard bind address. Keep 127.0.0.1 unless behind a firewall / tunnel.
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = Field(default=8765, ge=1, le=65535)
+    #: Optional bearer token for the dashboard (required when host is not loopback).
+    dashboard_token: str = ""
+
+
 class Settings(BaseModel):
     """Root settings object persisted to config/settings.json."""
     model_config = ConfigDict(extra="ignore")
@@ -165,6 +208,7 @@ class Settings(BaseModel):
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     pushplus: PushPlusSettings = Field(default_factory=PushPlusSettings)
     tushare: TushareSettings = Field(default_factory=TushareSettings)
+    trading: TradingSettings = Field(default_factory=TradingSettings)
 
 
 def provider_api_key_configured(settings: Settings | None) -> bool:

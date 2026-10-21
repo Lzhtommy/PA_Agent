@@ -52,5 +52,29 @@
   },
   "tushare": {
     "token": ""
+  },
+  "trading": {
+    "enabled": false,
+    "demo": true,
+    "okx_api_key": "",
+    "okx_secret_key": "",
+    "okx_passphrase": "",
+    "margin_mode": "isolated",
+    "leverage": 5,
+    "risk_per_trade_pct": 1.0,
+    "max_daily_loss_pct": 3.0,
+    "max_open_positions": 1,
+    "min_reward_risk": 1.0,
+    "min_trade_confidence": 0,
+    "min_stop_distance_pct": 0.05,
+    "max_stop_distance_pct": 8.0,
+    "pending_expiry_bars": 3,
+    "tp1_close_fraction": 0.5,
+    "move_stop_to_breakeven": true,
+    "breakout_mode": "trigger",
+    "poll_interval_s": 3.0,
+    "dashboard_host": "127.0.0.1",
+    "dashboard_port": 8765,
+    "dashboard_token": ""
   }
 }

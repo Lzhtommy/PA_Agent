@@ -10,7 +10,7 @@
 
 ## 主要功能
 
-- 📈 **多数据源**：MT5（Windows）、TradingView（全平台）、yfinance（期货/加密货币）、AkShare（A 股）
+- 📈 **多数据源**：MT5（Windows）、TradingView（全平台）、OKX（加密货币永续合约）、yfinance（期货/加密货币）、AkShare（A 股）
 - 🧠 **两阶段 AI 分析**：市场诊断 → 策略路由 → 交易决策（限价/突破/市价或不下单）
 - 🔄 **增量分析与持续跟踪**：新增 K 线时复用上次结论；开启 `keep_analysis` 后新 K 线收盘自动触发新一轮分析
 - 🌳 **决策树可视化**：赛博科幻风格可交互流程图，自动播放闸门→策略路径动画
@@ -66,6 +66,21 @@ make uv-run
 ```
 
 > 运行测试：`make uv-test`，代码检查：`make uv-lint`。
+
+---
+
+## 量化交易（OKX 永续合约，可选）
+
+把第二阶段的决策自动下到 OKX（默认模拟盘），带风控、两段止盈 + 保本止损、紧急停止，并提供网页收益面板；也可以无窗口在 VPS 上长期运行：
+
+```bash
+uv sync --extra trading
+uv run python -m pa_agent.trading check        # 检查 OKX 密钥和账户
+uv run python -m pa_agent.headless --symbols BTC-USDT-SWAP --timeframe 1h --trade
+# 面板：http://127.0.0.1:8765
+```
+
+完整说明见 [`docs/量化交易使用说明.md`](docs/量化交易使用说明.md)。
 
 ---
 

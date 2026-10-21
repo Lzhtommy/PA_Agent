@@ -32,14 +32,8 @@ def test_mt5_in_ui_choices():
     ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
     assert "mt5" in ui_kinds
     assert DATA_SOURCE_CHOICES[0][0] == "mt5"
-    # eastmoney / AkShare 仍是隐藏源
-    assert "eastmoney" not in ui_kinds
-    assert "akshare" not in ui_kinds
-
-
-def test_tushare_not_in_ui_choices():
-    ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
-    assert "tushare" not in ui_kinds
+    for kind in ("tradingview", "yfinance", "akshare", "eastmoney", "eastmoney_futures", "tushare"):
+        assert kind in ui_kinds
 
 
 def test_create_data_source_returns_expected_types():

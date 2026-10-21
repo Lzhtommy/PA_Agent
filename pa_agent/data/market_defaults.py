@@ -101,6 +101,12 @@ def normalize_gold_symbol_for_kind(kind: str, symbol: str) -> str:
     from pa_agent.data.ashare_common import normalize_ashare_symbol
 
     sym = (symbol or "").strip()
+    if kind == "okx":
+        from pa_agent.data.okx_source import OKX_DEFAULT_SYMBOL, normalize_okx_inst_id
+
+        if not sym or sym.upper() in (GOLD_MT5_SYMBOL.upper(), GOLD_TV_SYMBOL):
+            return OKX_DEFAULT_SYMBOL
+        return normalize_okx_inst_id(sym) or OKX_DEFAULT_SYMBOL
     if kind in ("akshare", "eastmoney", "tushare"):
         code = normalize_ashare_symbol(sym)
         if not code or not _looks_like_ashare_code(code):

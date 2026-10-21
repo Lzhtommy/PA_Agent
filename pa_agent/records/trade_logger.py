@@ -185,6 +185,7 @@ def _render_chart(bars_newest_first: list[Any], ema20_newest_first: list[float],
     _cjk_candidates = [
         "Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei",
         "Noto Sans CJK SC", "Source Han Sans CN",
+        "PingFang SC", "Hiragino Sans GB", "Heiti SC", "STHeiti", "Arial Unicode MS",
     ]
     _available = {f.name for f in _fm.fontManager.ttflist}
     for _fc in _cjk_candidates:

@@ -39,12 +39,20 @@ dev = [
     "ruff>=0.5",
     "black>=24.4",
 ]
+trading = [
+    "fastapi>=0.110",
+    "matplotlib>=3.8",
+    "uvicorn>=0.29",
+]
 
 [project.scripts]
 pa-agent = "pa_agent.main:main"
 
 [tool.setuptools.packages.find]
 include = ["pa_agent*"]
+
+[tool.setuptools.package-data]
+"pa_agent.trading" = ["static/*.html"]
 
 [tool.black]
 line-length = 100

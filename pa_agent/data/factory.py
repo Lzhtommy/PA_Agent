@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pa_agent.data.base import DataSource
+from pa_agent.data.okx_source import OKX_DEFAULT_SYMBOL
 from pa_agent.data.market_defaults import (
     A_SHARE_DEFAULT_SYMBOL,
     GOLD_MT5_SYMBOL,
@@ -18,18 +19,22 @@ DataSourceKind = Literal[
     "eastmoney_futures",
     "tushare",
     "yfinance",
+    "okx",
 ]
 
-# UI-visible sources — 可在界面下拉框直接选择。
-# MT5 为默认数据源，排在首位；eastmoney 等仍可通过隐藏 kind 创建。
+# UI-visible sources — 可在界面下拉框直接选择。MT5 为默认数据源，排在首位。
 DATA_SOURCE_CHOICES: tuple[tuple[DataSourceKind, str], ...] = (
     ("mt5", "MT5"),
     ("tradingview", "TradingView"),
+    ("okx", "OKX"),
+    ("yfinance", "YFinance"),
+    ("akshare", "AkShare"),
+    ("eastmoney", "东方财富"),
+    ("eastmoney_futures", "东方财富期货"),
+    ("tushare", "Tushare(A股)"),
 )
 
-_HIDDEN_KINDS: frozenset[DataSourceKind] = frozenset(
-    {"akshare", "tushare", "yfinance", "eastmoney", "eastmoney_futures"}
-)
+_HIDDEN_KINDS: frozenset[DataSourceKind] = frozenset()
 
 _DEFAULT_SYMBOLS: dict[DataSourceKind, str] = {
     "mt5": GOLD_MT5_SYMBOL,
@@ -39,6 +44,7 @@ _DEFAULT_SYMBOLS: dict[DataSourceKind, str] = {
     "eastmoney_futures": "RB0 螺纹钢",
     "tushare": A_SHARE_DEFAULT_SYMBOL,
     "yfinance": "GC=F",
+    "okx": OKX_DEFAULT_SYMBOL,
 }
 
 
@@ -103,6 +109,10 @@ def create_data_source(kind: str | None) -> DataSource:
         from pa_agent.data.akshare_source import AkShareSource
 
         return AkShareSource()
+    if normalized == "okx":
+        from pa_agent.data.okx_source import OkxSource
+
+        return OkxSource()
     if normalized == "yfinance":
         from pa_agent.data.yfinance_source import YFinanceSource
 

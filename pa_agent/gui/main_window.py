@@ -436,7 +436,7 @@ class MainWindow(QMainWindow):
         self._data_source_combo.setMinimumWidth(108)
         self._data_source_combo.setToolTip(
             "K 线数据来源：MT5（默认，需终端登录）、"
-            "TradingView（tvDatafeed）、东方财富(A股)（HTTP 直连）"
+            "TradingView（tvDatafeed）、OKX（永续合约，与自动交易同源）、YFinance、AkShare、东方财富、Tushare"
         )
         self._data_source_combo.currentIndexChanged.connect(
             self._on_data_source_combo_changed
@@ -1133,6 +1133,8 @@ class MainWindow(QMainWindow):
             )
         elif kind == "eastmoney_futures":
             line.setPlaceholderText("选择左侧品种后在此选合约, 或直接输入如 AO2509")
+        elif kind == "okx":
+            line.setPlaceholderText("OKX 永续合约，如 BTC-USDT-SWAP（也可输入 BTC / ETHUSDT）")
         elif kind in ("akshare", "eastmoney", "tushare"):
             line.setPlaceholderText("A股 6 位代码，如 600519；指数 000300 或 sh000300")
         else:
@@ -3428,6 +3430,11 @@ class MainWindow(QMainWindow):
 
             elif getattr(self, "_demo_mode", False):
                 self._present_decision_flow_playback(force_play=True)
+            elif self._has_order_opportunity(inner):
+                # Popup disabled: still log the trade, notify and queue the trading signal.
+                self._spawn_post_order_followup(inner, decision)
+            else:
+                self._spawn_trading_signal(inner, decision)
 
             # ── FlowBar: mark Stage 2 done ────────────────────────────────────
             flow = getattr(self, "_flow_bar", None)
@@ -4029,8 +4036,10 @@ class MainWindow(QMainWindow):
             decision_stance = getattr(settings.general, "decision_stance", "") or ""
         stage1_diag = self._current_stage1_diagnosis() or None
         frame = getattr(self, "_last_analysis_frame", None)
+        signal_ctx = self._trading_signal_context()
 
         def _run() -> None:
+            latest_img = None
             try:
                 from pa_agent.records.trade_logger import save_trade_record
 
@@ -4088,9 +4097,70 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("下单信号通知失败（不影响主流程）: %s", exc)
 
+            if signal_ctx is not None:
+                self._emit_trading_signal(
+                    signal_ctx, inner, decision,
+                    chart_image=str(latest_img) if latest_img else "",
+                )
+
         threading.Thread(
             target=_run,
             name="post-order-followup",
+            daemon=True,
+        ).start()
+
+    def _trading_signal_context(self) -> dict | None:
+        """Snapshot what a trading signal needs (UI thread); None when not applicable."""
+        settings = getattr(self._ctx, "settings", None)
+        trading = getattr(settings, "trading", None) if settings is not None else None
+        if trading is None or not trading.enabled or getattr(self, "_demo_mode", False):
+            return None
+        record = getattr(self, "_last_analysis_record", None)
+        meta = getattr(record, "meta", None)
+        key = getattr(meta, "timestamp_local_ms", None)
+        if key is None:
+            import time as _time
+
+            key = int(_time.time() * 1000)
+        return {
+            "settings": settings,
+            "symbol": self._symbol_combo.currentText().strip()
+            or getattr(settings.general, "last_symbol", ""),
+            "timeframe": self._tf_combo.currentText(),
+            "stage1": self._current_stage1_diagnosis() or None,
+            "analysis_key": str(key),
+        }
+
+    @staticmethod
+    def _emit_trading_signal(ctx: dict, inner: dict, decision: dict, *, chart_image: str = "") -> None:
+        try:
+            from pa_agent.trading.signals import emit_signal
+
+            emit_signal(
+                ctx["settings"],
+                decision_inner=inner,
+                stage2_full=decision,
+                stage1_diagnosis=ctx["stage1"],
+                symbol=ctx["symbol"],
+                timeframe=ctx["timeframe"],
+                source="gui",
+                analysis_key=ctx["analysis_key"],
+                chart_image=chart_image,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("交易信号写入失败（不影响分析）: %s", exc)
+
+    def _spawn_trading_signal(self, inner: dict, decision: dict) -> None:
+        """Queue a non-order decision so the executor can cancel stale resting entries."""
+        ctx = self._trading_signal_context()
+        if ctx is None:
+            return
+        import threading
+
+        threading.Thread(
+            target=self._emit_trading_signal,
+            args=(ctx, inner, decision),
+            name="trading-signal",
             daemon=True,
         ).start()
 
