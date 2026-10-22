@@ -108,7 +108,7 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
 
   <div class="grid2">
     <div class="card">
-      <h2>账户权益曲线</h2>
+      <h2>账户权益曲线 (USDT)</h2>
       <div class="chart-box"><canvas id="eqChart"></canvas></div>
     </div>
     <div class="card">
@@ -118,7 +118,7 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
   </div>
 
   <div class="card">
-    <h2>累计净盈亏（按平仓顺序）</h2>
+    <h2>累计净盈亏 (USDT，按平仓顺序)</h2>
     <div class="chart-box"><canvas id="pnlChart"></canvas></div>
   </div>
 
@@ -208,18 +208,18 @@ async function loadOverview() {
   $("killBtn").dataset.on = o.kill_switch ? "1" : "0";
   const eq = o.equity;
   $("kpis").innerHTML = [
-    kpi("账户权益", eq ? num(eq.total_eq) : "—", eq ? `浮动盈亏 ${num(eq.upl)}` : ""),
-    kpi("净盈亏 (U)", signed(s.net_pnl), s.return_pct != null ? `收益率 ${pct(s.return_pct, 2)}` : ""),
+    kpi("账户权益 (USDT)", eq ? num(eq.total_eq) : "—", eq ? `可用 ${num(eq.avail_eq)} · 浮动盈亏 ${num(eq.upl)}` : ""),
+    kpi("净盈亏 (USDT)", signed(s.net_pnl), s.return_pct != null ? `收益率 ${pct(s.return_pct, 2)}` : ""),
     kpi("胜率", pct(s.win_rate), `${s.wins} 盈 / ${s.losses} 亏，共 ${s.trades} 笔`),
     kpi("盈亏比", num(s.payoff_ratio), `利润因子 ${num(s.profit_factor)}`),
-    kpi("平均 R", num(s.avg_r), `每笔期望 ${num(s.expectancy)} U`),
-    kpi("最大回撤", num(s.max_drawdown), s.max_drawdown_pct ? pct(s.max_drawdown_pct, 2) : ""),
-    kpi("手续费", num(s.fees), `资金费 ${num(s.funding)}（均已计入净盈亏）`),
+    kpi("平均 R", num(s.avg_r), `每笔期望 ${num(s.expectancy)} USDT`),
+    kpi("最大回撤 (USDT)", num(s.max_drawdown), s.max_drawdown_pct ? pct(s.max_drawdown_pct, 2) : ""),
+    kpi("手续费 (USDT)", num(s.fees), `资金费 ${num(s.funding)}（均已计入净盈亏）`),
   ].join("");
   table($("activeTbl"), [
     ["#", (r) => r.id], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))], ["方向", (r) => dirLabel(r.direction)],
     ["状态", (r) => stateLabel[r.state] + (r.state === "pending" ? "·" + entryLabel[r.entry_type] : "")],
-    ["仓位 (U)", posU],
+    ["仓位 (USDT)", posU],
     ["入场", (r) => num(r.avg_entry || r.planned_entry, 1)], ["止损", (r) => num(r.stop_loss, 1)],
     ["止盈", (r) => num(r.tp1, 1) + (r.tp2 ? " / " + num(r.tp2, 1) : "")],
   ], o.active, (r) => openTrade(r.id));
@@ -238,9 +238,9 @@ async function loadTrades() {
   table($("tradesTbl"), [
     ["#", (r) => r.id], ["开仓时间", (r) => ts(r.opened_ms || r.created_ms)], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))],
     ["周期", (r) => esc(r.timeframe)], ["方向", (r) => dirLabel(r.direction)], ["入场方式", (r) => entryLabel[r.entry_type] || r.entry_type],
-    ["状态", (r) => stateLabel[r.state] || r.state], ["仓位 (U)", posU],
+    ["状态", (r) => stateLabel[r.state] || r.state], ["仓位 (USDT)", posU],
     ["入场价", (r) => num(r.avg_entry || r.planned_entry, 1)], ["出场价", (r) => num(r.avg_exit, 1)],
-    ["净盈亏", (r) => signed(r.net_pnl)], ["R", (r) => r.net_pnl != null && r.risk_amount ? signed(r.net_pnl / r.risk_amount) : "—"],
+    ["净盈亏 (USDT)", (r) => signed(r.net_pnl)], ["R", (r) => r.net_pnl != null && r.risk_amount ? signed(r.net_pnl / r.risk_amount) : "—"],
     ["AI把握度", (r) => r.trade_confidence ?? "—"], ["离场原因", (r) => esc(r.close_reason)],
   ], rows, (r) => openTrade(r.id));
 }
@@ -310,12 +310,12 @@ async function openTrade(id) {
       <div>品种</div><div>${esc(t.inst_id)} · ${esc(t.timeframe)} · ${t.demo ? "模拟盘" : "实盘"}</div>
       <div>方向/方式</div><div>${dirLabel(t.direction)} · ${entryLabel[t.entry_type] || t.entry_type}</div>
       <div>状态</div><div>${stateLabel[t.state] || t.state} ${esc(t.close_reason)}</div>
-      <div>仓位</div><div>${posU(t)} U（${num(t.filled_contracts || t.contracts, 2)} 张 × 每张 ${t.ct_val}）</div>
+      <div>仓位</div><div>${posU(t)} USDT（${num(t.filled_contracts || t.contracts, 2)} 张 × 每张 ${t.ct_val}）</div>
       <div>计划入场</div><div>${num(t.planned_entry, 2)}</div>
       <div>成交均价</div><div>${num(t.avg_entry, 2)} → ${num(t.avg_exit, 2)}</div>
       <div>止损 / 止盈</div><div>${num(t.stop_loss, 2)} / ${num(t.tp1, 2)}${t.tp2 ? " / " + num(t.tp2, 2) : ""}</div>
-      <div>计划风险</div><div>${num(t.risk_amount)} U（开仓时权益 ${num(t.equity_at_entry)}）</div>
-      <div>净盈亏</div><div>${signed(t.net_pnl)} U（平仓盈亏 ${num(t.realized_pnl)}，手续费 ${num(t.fee)}，资金费 ${num(t.funding_fee)}）</div>
+      <div>计划风险</div><div>${num(t.risk_amount)} USDT（开仓时权益 ${num(t.equity_at_entry)}）</div>
+      <div>净盈亏</div><div>${signed(t.net_pnl)} USDT（平仓盈亏 ${num(t.realized_pnl)}，手续费 ${num(t.fee)}，资金费 ${num(t.funding_fee)}）</div>
       <div>时间</div><div>${ts(t.created_ms)} 下单 · ${ts(t.opened_ms)} 成交 · ${ts(t.closed_ms)} 结束</div>
     </div>
     ${signalSection(signal)}

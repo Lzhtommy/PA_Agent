@@ -109,3 +109,12 @@ def test_entry_payloads():
     kind, body = rest.posts[-1]
     assert body["ordType"] == "conditional" and body["reduceOnly"] is True
     assert body["slTriggerPx"] == "99" and body["slOrdPx"] == "-1"
+
+
+def test_account_equity_is_usdt_balance():
+    b = OkxBroker(_Rest(balance={"totalEq": "87347.6", "upl": "", "details": [
+        {"ccy": "USDT", "eq": "87477.1", "availEq": "50263.5", "upl": "12.5"}]}))
+    a = b.account()
+    assert (a.total_eq, a.avail_eq, a.upl, a.ccy) == (87477.1, 50263.5, 12.5, "USDT")
+    a = OkxBroker(_Rest(balance={"totalEq": "1000", "details": []})).account()
+    assert (a.total_eq, a.ccy) == (1000.0, "USD")  # no USDT balance: fall back to totalEq

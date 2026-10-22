@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS equity (
     total_eq REAL NOT NULL,
     avail_eq REAL,
     upl REAL,
-    demo INTEGER NOT NULL DEFAULT 1
+    demo INTEGER NOT NULL DEFAULT 1,
+    ccy TEXT NOT NULL DEFAULT 'USDT'
 );
 
 CREATE TABLE IF NOT EXISTS kv (
@@ -125,6 +126,10 @@ class TradeStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=30000")
             self._conn.executescript(_SCHEMA)
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(equity)")}
+            if "ccy" not in cols:
+                # Rows written before equity switched to USDT hold OKX totalEq (USD).
+                self._conn.execute("ALTER TABLE equity ADD COLUMN ccy TEXT NOT NULL DEFAULT 'USD'")
             self._conn.commit()
 
     def close(self) -> None:
@@ -286,28 +291,30 @@ class TradeStore:
 
     # ── equity ────────────────────────────────────────────────────────────────
 
+    # Equity reads only return USDT rows so stats never mix USD and USDT values.
+
     def record_equity(self, total_eq: float, avail_eq: float | None, upl: float | None,
-                      *, demo: bool) -> None:
+                      *, demo: bool, ccy: str = "USDT") -> None:
         self._exec(
-            "INSERT OR REPLACE INTO equity(ts_ms, total_eq, avail_eq, upl, demo) "
-            "VALUES(?, ?, ?, ?, ?)",
-            (now_ms(), total_eq, avail_eq, upl, int(demo)),
+            "INSERT OR REPLACE INTO equity(ts_ms, total_eq, avail_eq, upl, demo, ccy) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            (now_ms(), total_eq, avail_eq, upl, int(demo), ccy),
         )
 
     def equity_series(self, *, since_ms: int = 0, demo: bool | None = None) -> list[dict[str, Any]]:
         if demo is None:
             return self._rows(
-                "SELECT * FROM equity WHERE ts_ms>=? ORDER BY ts_ms", (since_ms,)
+                "SELECT * FROM equity WHERE ts_ms>=? AND ccy='USDT' ORDER BY ts_ms", (since_ms,)
             )
         return self._rows(
-            "SELECT * FROM equity WHERE ts_ms>=? AND demo=? ORDER BY ts_ms",
+            "SELECT * FROM equity WHERE ts_ms>=? AND demo=? AND ccy='USDT' ORDER BY ts_ms",
             (since_ms, int(demo)),
         )
 
     def latest_equity(self) -> dict[str, Any] | None:
-        return self._row("SELECT * FROM equity ORDER BY ts_ms DESC LIMIT 1")
+        return self._row("SELECT * FROM equity WHERE ccy='USDT' ORDER BY ts_ms DESC LIMIT 1")
 
     def first_equity_since(self, since_ms: int) -> dict[str, Any] | None:
         return self._row(
-            "SELECT * FROM equity WHERE ts_ms>=? ORDER BY ts_ms LIMIT 1", (since_ms,)
+            "SELECT * FROM equity WHERE ts_ms>=? AND ccy='USDT' ORDER BY ts_ms LIMIT 1", (since_ms,)
         )

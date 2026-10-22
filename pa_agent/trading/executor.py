@@ -750,7 +750,8 @@ class Executor:
         except OkxError as exc:
             logger.warning("equity snapshot failed: %s", exc)
             return
-        self.store.record_equity(acct.total_eq, acct.avail_eq, acct.upl, demo=self.broker.demo)
+        self.store.record_equity(acct.total_eq, acct.avail_eq, acct.upl, demo=self.broker.demo,
+                                 ccy=acct.ccy)
 
     def _reconcile(self) -> None:
         """Warn about exchange positions the executor is not managing."""

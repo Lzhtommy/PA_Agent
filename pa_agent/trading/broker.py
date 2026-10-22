@@ -50,6 +50,7 @@ class AccountInfo:
     total_eq: float
     avail_eq: float
     upl: float | None
+    ccy: str = "USDT"     # "USD" only when falling back to totalEq (no USDT balance)
 
 
 @dataclass(frozen=True)
@@ -144,18 +145,25 @@ class OkxBroker:
         return float(self._c.ticker(inst_id)["last"])
 
     def account(self) -> AccountInfo:
+        # Equity in USDT (the swaps' margin currency); totalEq is the USD value of
+        # every currency and is only the fallback when there is no USDT balance.
         bal = self._c.balance()
         total = _f(bal.get("totalEq")) or 0.0
+        ccy = "USD"
         avail = None
         upl = _f(bal.get("upl"))
         for d in bal.get("details") or []:
             if d.get("ccy") == "USDT":
+                usdt_eq = _f(d.get("eq"))
+                if usdt_eq is not None:
+                    total, ccy = usdt_eq, "USDT"
                 avail = _f(d.get("availEq"))
                 if avail is None:
                     avail = _f(d.get("availBal"))
-                if upl is None:
-                    upl = _f(d.get("upl"))
-        return AccountInfo(total_eq=total, avail_eq=avail if avail is not None else total, upl=upl)
+                usdt_upl = _f(d.get("upl"))
+                if usdt_upl is not None:
+                    upl = usdt_upl
+        return AccountInfo(total_eq=total, avail_eq=avail if avail is not None else total, upl=upl, ccy=ccy)
 
     def prepare_instrument(self, inst_id: str, leverage: int, margin_mode: str) -> None:
         if not self._pos_mode_checked:

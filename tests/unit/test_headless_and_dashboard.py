@@ -228,3 +228,24 @@ def test_dashboard_runner_config(tmp_path):
     assert c.post("/api/runner", json={"symbols": "NOPE", "timeframe": "1h"}).status_code == 400
     assert c.post("/api/runner", json={"symbols": "", "timeframe": "1h"}).status_code == 400
     assert read_runner_config(store)[1] == "4h"  # rejected saves change nothing
+
+
+def test_equity_reads_skip_legacy_usd_rows(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)  # equity table as created before the ccy column existed
+    con.execute("CREATE TABLE equity (ts_ms INTEGER PRIMARY KEY, total_eq REAL NOT NULL, "
+                "avail_eq REAL, upl REAL, demo INTEGER NOT NULL DEFAULT 1)")
+    con.execute("INSERT INTO equity VALUES (1, 87300, 50000, 0, 1)")
+    con.commit()
+    con.close()
+    store = TradeStore(db)
+    assert store.equity_series() == [] and store.latest_equity() is None
+    store.record_equity(87477, 50263, 0, demo=True)
+    time.sleep(0.005)  # ts_ms is the primary key
+    store.record_equity(1000, 1000, 0, demo=True, ccy="USD")
+    rows = store.equity_series(demo=True)
+    assert [(r["total_eq"], r["ccy"]) for r in rows] == [(87477, "USDT")]
+    assert store.latest_equity()["total_eq"] == 87477
+    assert store.first_equity_since(0)["total_eq"] == 87477
