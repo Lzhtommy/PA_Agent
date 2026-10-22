@@ -212,9 +212,11 @@ class Executor:
         pending = [t for t in active if t["state"] == "pending"]
 
         if sig["order_type"] == "none":
-            for t in pending:
-                self._cancel_pending(t, f"最新分析（信号 #{sid}）不再支持该入场")
-            self.store.mark_signal(sid, "processed", "不下单")
+            # "不下单" means "no new entry now", not "the resting one is wrong": the AI
+            # is not shown its pending orders. Keep them until expiry, stop touched
+            # before fill, or an opposite-direction plan.
+            keep = "，保留挂单 " + "、".join(f"#{t['id']}" for t in pending) if pending else ""
+            self.store.mark_signal(sid, "processed", "不下单" + keep)
             return
 
         if open_trades:
@@ -227,9 +229,10 @@ class Executor:
         try:
             plan = build_entry_plan(sig, ref, self.cfg.risk)
         except RiskRejected as exc:
-            # A rejected plan still means the AI moved on — retire the old entry.
+            # A rejected opposite-direction plan still means the AI flipped its view.
             for t in pending:
-                self._cancel_pending(t, f"被信号 #{sid} 取代（新信号未通过风控）")
+                if t["direction"] != sig["direction"]:
+                    self._cancel_pending(t, f"信号 #{sid} 转为反方向（新信号未通过风控）")
             self.store.mark_signal(sid, "rejected", str(exc))
             self._event(None, "risk_reject", f"信号 #{sid}: {exc}", signal_id=sid)
             return
@@ -459,6 +462,16 @@ class Executor:
         if status.state == "filled":
             self._on_entry_filled(trade, status)
             return
+        if status.state == "live" and not status.filled and not expired:
+            # Breakout entries can see price run to the stop without triggering;
+            # the setup is then invalid even though the order is still resting.
+            try:
+                last = self.broker.last_price(trade["inst_id"])
+            except OkxError:
+                last = None
+            if last is not None and (last - trade["stop_loss"]) * _sign(trade["direction"]) <= 0:
+                self._cancel_pending(trade, f"未成交前价格 {_px(last)} 已触及止损 {_px(trade['stop_loss'])}，入场失效")
+                return
         if status.state in ("canceled", "failed"):
             if status.filled > 0:
                 self._on_entry_filled(trade, status)

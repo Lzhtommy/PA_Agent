@@ -248,15 +248,52 @@ def test_stop_loss_exit(env):
     assert broker.orders[trade["tp1_cl_ord_id"]].state == "canceled"
 
 
-def test_no_order_signal_cancels_pending(env):
+def test_no_order_signal_keeps_pending(env):
     store, broker, ex = env
     _signal(store)
     ex.tick()
-    _signal(store, uid="s2", order_type="none", direction="")
+    sid = _signal(store, uid="s2", order_type="none", direction="")
     ex.tick()
     trade = store.list_trades()[0]
-    assert trade["state"] == "canceled"
-    assert "不再支持" in trade["close_reason"]
+    assert trade["state"] == "pending"
+    assert store.get_signal(sid)["status_reason"] == f"不下单，保留挂单 #{trade['id']}"
+
+
+def test_opposite_direction_plan_replaces_pending(env):
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    _signal(store, uid="s2", direction="short", entry=101.0, stop_loss=102.0, tp1=99.0, tp2=None)
+    ex.tick()
+    trades = store.list_trades()
+    assert [(t["direction"], t["state"]) for t in trades] == [("short", "pending"), ("long", "canceled")]
+
+
+def test_rejected_plan_cancels_pending_only_if_opposite(env):
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    _signal(store, uid="s2", tp1=99.5)  # same direction, fails reward/risk
+    ex.tick()
+    assert [t["state"] for t in store.list_trades()] == ["pending"]
+    _signal(store, uid="s3", direction="short", entry=101.0, stop_loss=102.0, tp1=100.5, tp2=None)
+    ex.tick()
+    trade = store.list_trades()[0]
+    assert trade["state"] == "canceled" and "反方向" in trade["close_reason"]
+
+
+def test_pending_canceled_when_price_touches_stop_before_fill(env):
+    store, broker, ex = env
+    _signal(store, order_type="stop", entry=101.0, stop_loss=99.0, tp1=104.0, tp2=None)
+    ex.tick()
+    trade = store.active_trades()[0]
+    broker.price = 99.5
+    ex.tick()
+    assert store.get_trade(trade["id"])["state"] == "pending"
+    broker.price = 99.0
+    ex.tick()
+    trade = store.get_trade(trade["id"])
+    assert trade["state"] == "canceled" and "已触及止损" in trade["close_reason"]
 
 
 def test_new_plan_replaces_pending_and_same_plan_keeps_it(env):
