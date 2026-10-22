@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PA Agent 收益面板</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 :root {
   --bg: #0b0f17; --panel: #121826; --panel-2: #182033; --line: #243049;
@@ -39,6 +40,14 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; min-width: 0; }
 .card h2 { font-size: 15px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .chart-box { position: relative; height: 280px; }
+.kline-box { position: relative; height: 420px; }
+@media (max-width: 600px) { .kline-box { height: 320px; } }
+input[type=text] { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 8px; font: inherit; min-width: 0; }
+.runner-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.runner-form input { flex: 1 1 260px; }
+.runner-form button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.kline-ctl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-weight: 400; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button.active { background: var(--accent); border-color: var(--accent); }
 .table-wrap { overflow-x: auto; }
@@ -77,6 +86,25 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
 </header>
 <main>
   <section class="kpis" id="kpis"></section>
+
+  <div class="card">
+    <h2>分析设置 <span class="hint">后台 AI 分析、交易的品种和K线周期，保存后下一轮生效，无需重启</span></h2>
+    <div class="runner-form">
+      <input type="text" id="runSymbols" placeholder="品种，逗号分隔，如 BTC-USDT-SWAP, ETH-USDT-SWAP（也可只写 BTC）">
+      <select id="runTf"></select>
+      <button id="runSave" class="primary">保存</button>
+    </div>
+    <p class="hint" id="runStatus" style="margin:8px 0 0"></p>
+  </div>
+
+  <div class="card">
+    <h2>K线 <span class="kline-ctl"><span class="hint" id="klineInfo"></span>
+      <select id="klineInst"></select>
+      <select id="klineTf">
+        <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="2h">2h</option><option value="4h">4h</option><option value="1d">1d</option><option value="1w">1w</option>
+      </select></span></h2>
+    <div class="kline-box" id="kline"></div>
+  </div>
 
   <div class="grid2">
     <div class="card">
@@ -137,6 +165,8 @@ const dirLabel = (d) => d === "long" ? '<span class="up">做多</span>' : d === 
 const entryLabel = { limit: "限价", stop: "突破", market: "市价", none: "不下单" };
 const stateLabel = { pending: "挂单中", open: "持仓中", closed: "已平仓", canceled: "已撤销", rejected: "已拒绝", error: "错误" };
 const sigStatus = { new: "待处理", processed: "已执行", rejected: "风控拒绝", skipped: "跳过", error: "错误" };
+const usdt = (contracts, ctVal, price) => contracts && ctVal && price ? num(contracts * ctVal * price, 0) : "—";
+const posU = (r) => usdt(r.filled_contracts || r.contracts, r.ct_val, r.avg_entry || r.planned_entry);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 let eqChart, pnlChart, qData, qKey = "by_confidence";
@@ -189,7 +219,7 @@ async function loadOverview() {
   table($("activeTbl"), [
     ["#", (r) => r.id], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))], ["方向", (r) => dirLabel(r.direction)],
     ["状态", (r) => stateLabel[r.state] + (r.state === "pending" ? "·" + entryLabel[r.entry_type] : "")],
-    ["张数", (r) => num(r.filled_contracts || r.contracts, 2)],
+    ["仓位 (U)", posU],
     ["入场", (r) => num(r.avg_entry || r.planned_entry, 1)], ["止损", (r) => num(r.stop_loss, 1)],
     ["止盈", (r) => num(r.tp1, 1) + (r.tp2 ? " / " + num(r.tp2, 1) : "")],
   ], o.active, (r) => openTrade(r.id));
@@ -208,7 +238,7 @@ async function loadTrades() {
   table($("tradesTbl"), [
     ["#", (r) => r.id], ["开仓时间", (r) => ts(r.opened_ms || r.created_ms)], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))],
     ["周期", (r) => esc(r.timeframe)], ["方向", (r) => dirLabel(r.direction)], ["入场方式", (r) => entryLabel[r.entry_type] || r.entry_type],
-    ["状态", (r) => stateLabel[r.state] || r.state], ["张数", (r) => num(r.filled_contracts || r.contracts, 2)],
+    ["状态", (r) => stateLabel[r.state] || r.state], ["仓位 (U)", posU],
     ["入场价", (r) => num(r.avg_entry || r.planned_entry, 1)], ["出场价", (r) => num(r.avg_exit, 1)],
     ["净盈亏", (r) => signed(r.net_pnl)], ["R", (r) => r.net_pnl != null && r.risk_amount ? signed(r.net_pnl / r.risk_amount) : "—"],
     ["AI把握度", (r) => r.trade_confidence ?? "—"], ["离场原因", (r) => esc(r.close_reason)],
@@ -280,7 +310,7 @@ async function openTrade(id) {
       <div>品种</div><div>${esc(t.inst_id)} · ${esc(t.timeframe)} · ${t.demo ? "模拟盘" : "实盘"}</div>
       <div>方向/方式</div><div>${dirLabel(t.direction)} · ${entryLabel[t.entry_type] || t.entry_type}</div>
       <div>状态</div><div>${stateLabel[t.state] || t.state} ${esc(t.close_reason)}</div>
-      <div>张数</div><div>${num(t.filled_contracts || t.contracts, 2)}（每张 ${t.ct_val}）</div>
+      <div>仓位</div><div>${posU(t)} U（${num(t.filled_contracts || t.contracts, 2)} 张 × 每张 ${t.ct_val}）</div>
       <div>计划入场</div><div>${num(t.planned_entry, 2)}</div>
       <div>成交均价</div><div>${num(t.avg_entry, 2)} → ${num(t.avg_exit, 2)}</div>
       <div>止损 / 止盈</div><div>${num(t.stop_loss, 2)} / ${num(t.tp1, 2)}${t.tp2 ? " / " + num(t.tp2, 2) : ""}</div>
@@ -312,9 +342,142 @@ $("killBtn").onclick = async () => {
 };
 $("range").onchange = () => { loadOverview(); loadEquity(); };
 
+// ── 分析设置 ──
+let runnerCfg = null, runDirty = false;
+$("runSymbols").oninput = () => { runDirty = true; };
+$("runTf").onchange = () => { runDirty = true; };
+
+async function loadRunner() {
+  const r = await api("/api/runner");
+  runnerCfg = r;
+  if (!$("runTf").options.length) $("runTf").innerHTML = r.timeframes.map((t) => `<option value="${t}">${t}</option>`).join("");
+  const cfg = r.config || r.active;
+  if (cfg && !runDirty && document.activeElement !== $("runSymbols")) {
+    $("runSymbols").value = cfg.symbols.join(", ");
+    $("runTf").value = cfg.timeframe;
+  }
+  const a = r.active;
+  let msg;
+  if (!a) msg = "后台分析没有在运行（需要用 headless --trade 启动）" +
+    (r.config ? `，启动后按已保存的 ${r.config.symbols.join(", ")} · ${r.config.timeframe} 运行` : "");
+  else {
+    msg = `${r.running ? "运行中" : "已停止（2 分钟内无心跳）"}：${a.symbols.join(", ") || "无可用品种"} · ${a.timeframe}`;
+    const c = r.config;
+    if (c && r.running && (c.timeframe !== a.timeframe || c.symbols.join() !== a.symbols.join()))
+      msg += `　→ 已保存 ${c.symbols.join(", ")} · ${c.timeframe}，等待后台切换（约 10 秒）`;
+  }
+  $("runStatus").textContent = msg;
+}
+
+$("runSave").onclick = async () => {
+  const symbols = $("runSymbols").value, timeframe = $("runTf").value;
+  $("runSave").disabled = true;
+  try {
+    const headers = { "Content-Type": "application/json", ...(TOKEN ? { Authorization: "Bearer " + TOKEN } : {}) };
+    const r = await fetch("/api/runner", { method: "POST", headers, body: JSON.stringify({ symbols, timeframe }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { $("runStatus").textContent = "保存失败：" + (body.detail || r.status); return; }
+    runDirty = false;
+    await loadRunner();
+    klineOptions([...body.config.symbols]);
+    $("klineTf").value = body.config.timeframe;
+    loadKline().catch(() => {});
+  } finally { $("runSave").disabled = false; }
+};
+
+// ── K线：OKX 实时 K 线 + 本系统交易的入场/出场标记和当前挂单/持仓的价位线 ──
+const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;  // 图表按 UTC 画，平移到本地时间
+let kChart, kSeries, kLines = [], kKey = "";
+
+function klineOptions(insts) {
+  const sel = $("klineInst"), cur = sel.value;
+  const list = [...new Set(insts)].filter(Boolean);
+  if (!list.length) list.push("BTC-USDT-SWAP");
+  if (sel.options.length === list.length && [...sel.options].every((o, i) => o.value === list[i])) return;
+  sel.innerHTML = list.map((i) => `<option value="${esc(i)}">${esc(i.replace("-SWAP", ""))}</option>`).join("");
+  sel.value = list.includes(cur) ? cur : list[0];
+}
+
+function ensureKChart() {
+  if (kChart || !window.LightweightCharts) return !!kChart;
+  const el = $("kline");
+  kChart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    layout: { background: { color: css("--panel") }, textColor: css("--muted") },
+    grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: css("--line") },
+    rightPriceScale: { borderColor: css("--line") },
+    crosshair: { mode: 0 },
+  });
+  kSeries = kChart.addCandlestickSeries({
+    upColor: css("--up"), downColor: css("--down"), borderVisible: false,
+    wickUpColor: css("--up"), wickDownColor: css("--down"),
+  });
+  return true;
+}
+
+// 标记必须落在某根 K 线的时间上：取不晚于该时刻的最后一根
+function barTime(bars, ms) {
+  if (!ms || !bars.length || ms < bars[0].t) return null;
+  let lo = 0, hi = bars.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bars[mid].t <= ms) lo = mid; else hi = mid - 1; }
+  return bars[lo].t / 1000 + TZ_SHIFT;
+}
+
+async function loadKline() {
+  if (!ensureKChart()) { $("klineInfo").textContent = "图表库加载失败"; return; }
+  const inst = $("klineInst").value, tf = $("klineTf").value;
+  if (!inst) return;
+  const d = await api(`/api/candles?inst_id=${encodeURIComponent(inst)}&timeframe=${tf}&limit=300`);
+  const bars = d.bars;
+  kSeries.setData(bars.map((b) => ({ time: b.t / 1000 + TZ_SHIFT, open: b.o, high: b.h, low: b.l, close: b.c })));
+  if (kKey !== inst + tf) { kChart.timeScale().fitContent(); kKey = inst + tf; }
+
+  const markers = [];
+  for (const t of d.trades) {
+    const long = t.direction === "long";
+    const tIn = barTime(bars, t.opened_ms);
+    if (tIn != null) markers.push({ time: tIn, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown",
+      color: long ? css("--up") : css("--down"), text: `#${t.id} ${long ? "多" : "空"} ${num(t.avg_entry, 1)}` });
+    else if (!t.opened_ms) {
+      const tPlaced = barTime(bars, t.created_ms);
+      if (tPlaced != null) markers.push({ time: tPlaced, position: long ? "belowBar" : "aboveBar", shape: "circle",
+        color: css("--muted"), text: `#${t.id} ${stateLabel[t.state] || t.state}` });
+    }
+    const tOut = t.state === "closed" ? barTime(bars, t.closed_ms) : null;
+    if (tOut != null) markers.push({ time: tOut, position: long ? "aboveBar" : "belowBar", shape: "square",
+      color: (t.net_pnl ?? 0) >= 0 ? css("--up") : css("--down"),
+      text: `#${t.id} 平 ${t.net_pnl != null ? (t.net_pnl > 0 ? "+" : "") + num(t.net_pnl) + "U" : ""}` });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  kSeries.setMarkers(markers);
+
+  kLines.forEach((l) => kSeries.removePriceLine(l));
+  kLines = [];
+  const active = d.trades.filter((t) => t.state === "pending" || t.state === "open");
+  for (const t of active) {
+    const add = (price, color, title, style = 2) => price && kLines.push(kSeries.createPriceLine(
+      { price, color, title, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
+    add(t.avg_entry || t.planned_entry, css("--accent"), `#${t.id} ${t.state === "open" ? "持仓" : "挂单"}`, 0);
+    add(t.stop_loss, css("--down"), `#${t.id} 止损`);
+    add(t.tp1, css("--up"), `#${t.id} 止盈1`);
+    add(t.tp2, css("--up"), `#${t.id} 止盈2`);
+  }
+  const last = bars[bars.length - 1];
+  $("klineInfo").textContent = last ? `OKX 实盘行情 · 最新 ${num(last.c, 1)} · ${active.length} 笔活跃交易` : "";
+}
+
+$("klineInst").onchange = () => loadKline().catch(() => {});
+$("klineTf").onchange = () => loadKline().catch(() => {});
+
 async function refresh() {
   try {
-    await Promise.all([loadOverview(), loadEquity(), loadTrades(), loadQuality(), loadSignals(), loadEvents()]);
+    const [sigs] = await Promise.all([api("/api/signals?limit=50"), loadOverview(), loadEquity(), loadTrades(),
+      loadQuality(), loadSignals(), loadEvents(), loadRunner()]);
+    const runCfg = runnerCfg && (runnerCfg.config || runnerCfg.active);
+    if (!$("klineInst").options.length) $("klineTf").value = runCfg?.timeframe || sigs[0]?.timeframe || "1h";
+    klineOptions([...(runCfg?.symbols || []), ...sigs.map((s) => s.symbol)]);
+    await loadKline().catch((err) => { $("klineInfo").textContent = "K线加载失败：" + err.message; });
   } catch (err) {
     $("hb").className = "badge bad";
     $("hb").textContent = String(err).includes("401") ? "需要 token：在网址后加 ?token=…" : "面板连接失败";

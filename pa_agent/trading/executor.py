@@ -115,6 +115,21 @@ def _local_day_start_ms() -> int:
     return int(datetime(now.year, now.month, now.day).timestamp() * 1000)
 
 
+def _px(price: Any) -> str:
+    """Price without float noise (83098.09999999999 → 83098.1)."""
+    if price is None:
+        return "—"
+    return f"{float(price):.8f}".rstrip("0").rstrip(".")
+
+
+def _usdt(contracts: Any, ct_val: Any, price: Any) -> str:
+    """Contract count → approximate USDT notional, e.g. ``18,889U``."""
+    try:
+        return f"{float(contracts) * float(ct_val) * float(price):,.0f}U"
+    except (TypeError, ValueError):
+        return f"{contracts} 张"
+
+
 def _is_watching(trade: dict[str, Any]) -> bool:
     """Breakout entry watched locally — nothing has been sent to the exchange yet."""
     return trade["entry_type"] == "stop" and not trade["entry_algo_id"] and not trade["entry_ord_id"]
@@ -319,9 +334,10 @@ class Executor:
         note = f"（{plan.note}）" if plan.note else ""
         kind = {"limit": "限价", "stop": "突破", "market": "市价"}[plan.entry_type]
         desc = (
-            f"{'做多' if plan.direction == 'long' else '做空'} {inst} {contracts} 张 {kind}"
-            f" 入场 {plan.entry} 止损 {plan.stop_loss} 止盈 {plan.tp1}"
-            f"{' / ' + str(plan.tp2) if plan.tp2 else ''} 风险 {risk_amount:.2f}U"
+            f"{'做多' if plan.direction == 'long' else '做空'} {inst}"
+            f" {_usdt(contracts, spec.ct_val, plan.entry)} {kind}"
+            f" 入场 {_px(plan.entry)} 止损 {_px(plan.stop_loss)} 止盈 {_px(plan.tp1)}"
+            f"{' / ' + _px(plan.tp2) if plan.tp2 else ''} 风险 {risk_amount:.2f}U"
             f" 盈亏比 {plan.reward_risk:.2f}{note}"
         )
         if plan.entry_type == "stop" and self.cfg.breakout_mode == "watch":
@@ -404,7 +420,7 @@ class Executor:
             logger.info("cancel entry %s: %s", tid, exc)
         status = self._lookup_entry(trade)
         if status is not None and status.filled > 0 and status.state in ("filled", "canceled", "failed"):
-            self._event(tid, "entry_partial", f"撤单时已成交 {status.filled} 张，转为持仓管理")
+            self._event(tid, "entry_partial", f"撤单时已成交 {_usdt(status.filled, trade['ct_val'], status.avg_px or trade['planned_entry'])}，转为持仓管理")
             self._on_entry_filled(trade, status)
             return True
         if status is not None and status.state in ("canceled", "failed") and status.filled == 0:
@@ -457,7 +473,7 @@ class Executor:
             # the filled part ourselves meanwhile.
             if status.filled != (trade["filled_contracts"] or 0):
                 self.store.update_trade(tid, filled_contracts=status.filled)
-                self._event(tid, "entry_partial", f"入场部分成交 {status.filled} 张，先为已成交部分挂止损")
+                self._event(tid, "entry_partial", f"入场部分成交 {_usdt(status.filled, trade['ct_val'], status.avg_px or trade['planned_entry'])}，先为已成交部分挂止损")
             self._sync_stop(self.store.get_trade(tid) or trade, status.filled)
         if expired:
             self._cancel_pending(trade, expiry_reason)
@@ -472,7 +488,7 @@ class Executor:
             tid, state="open", filled_contracts=filled, remaining_contracts=filled,
             avg_entry=avg, opened_ms=status.fill_ms or now_ms(), expires_ms=None, close_reason="",
         )
-        self._event(tid, "entry_filled", f"入场成交 {filled} 张 @ {avg}")
+        self._event(tid, "entry_filled", f"入场成交 {_usdt(filled, trade['ct_val'], avg)} @ {_px(avg)}")
         trade = self.store.get_trade(tid) or trade
         self._sync_stop(trade, filled)
         self._place_take_profits(self.store.get_trade(tid) or trade, filled)
@@ -504,7 +520,7 @@ class Executor:
                     self._event(tid, "tp_error", f"{label}挂单失败（下轮重试）: {exc}", level="warn")
                     continue
             self.store.update_trade(tid, **{field: cid})
-            placed.append(f"{label} {size} 张 @ {price}")
+            placed.append(f"{label} {_usdt(size, trade['ct_val'], price)} @ {_px(price)}")
         if placed:
             self._event(tid, "exits_placed", "，".join(placed))
 
@@ -540,7 +556,7 @@ class Executor:
             try:
                 self.broker.cancel_stop(inst, s.algo_id)
                 self._event(tid, "stop_cancel",
-                            f"撤销多余/过期的止损单 {s.size} 张 @ {s.trigger_px}")
+                            f"撤销多余/过期的止损单 {_usdt(s.size, trade['ct_val'], s.trigger_px)} @ {_px(s.trigger_px)}")
             except OkxError as exc:
                 logger.info("cancel stale stop %s: %s", s.algo_id, exc)
         if keeper is not None:
@@ -570,7 +586,7 @@ class Executor:
             self.store.update_trade(tid, close_reason="止损单无法下达，已强制平仓")
             return False
         self.store.update_trade(tid, sl_algo_cl_ord_id=cid, sl_algo_id=algo_id)
-        self._event(tid, "stop_placed", f"止损单 {size} 张 @ {target}")
+        self._event(tid, "stop_placed", f"止损单 {_usdt(size, trade['ct_val'], target)} @ {_px(target)}")
         return True
 
     def _manage_open(self, trade: dict[str, Any]) -> None:
@@ -589,7 +605,7 @@ class Executor:
                 tp1 = None
             if tp1 is not None and tp1.state == "filled":
                 self.store.update_trade(tid, tp1_filled=1, remaining_contracts=size)
-                self._event(tid, "tp1_filled", f"止盈1成交 {tp1.filled} 张 @ {tp1.avg_px}")
+                self._event(tid, "tp1_filled", f"止盈1成交 {_usdt(tp1.filled, trade['ct_val'], tp1.avg_px)} @ {_px(tp1.avg_px)}")
                 trade = self.store.get_trade(tid) or trade
 
         if (

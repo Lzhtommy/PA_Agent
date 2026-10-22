@@ -11,6 +11,7 @@ PushPlus when configured, and queued as trading signals when
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import threading
 import time
@@ -20,6 +21,26 @@ from typing import Any
 logger = logging.getLogger("pa_agent.headless")
 
 _ORDER_TYPES = frozenset({"限价单", "突破单", "市价单"})
+
+# Trade-store kv keys shared with the dashboard: the page writes RUNNER_CONFIG_KEY,
+# the runner applies it between polls and reports what it runs in RUNNER_ACTIVE_KEY.
+RUNNER_CONFIG_KEY = "runner_config"
+RUNNER_ACTIVE_KEY = "runner_active"
+
+
+def read_runner_config(store: Any) -> tuple[list[str], str] | None:
+    try:
+        cfg = json.loads(store.get_kv(RUNNER_CONFIG_KEY) or "null")
+        symbols = [str(s) for s in cfg["symbols"] if str(s).strip()]
+        timeframe = str(cfg["timeframe"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return (symbols, timeframe) if symbols and timeframe else None
+
+
+def write_runner_config(store: Any, symbols: list[str], timeframe: str) -> None:
+    store.set_kv(RUNNER_CONFIG_KEY, json.dumps(
+        {"symbols": symbols, "timeframe": timeframe, "ts_ms": int(time.time() * 1000)}))
 
 
 def is_order_decision(inner: dict[str, Any], confidence_threshold: int = 0) -> bool:
@@ -67,20 +88,62 @@ class HeadlessRunner:
     bar_count: int = 0
     run_now: bool = False
     poll_s: float = 10.0
+    store: Any = None             # TradeStore: page-editable symbols/timeframe (None = fixed)
     states: dict[str, SymbolState] = field(default_factory=dict)
     _cancel: Any = None
 
     def __post_init__(self) -> None:
-        from pa_agent.data.factory import create_data_source
-
         if not self.bar_count:
             self.bar_count = int(self.ctx.settings.general.analysis_bar_count)
-        for sym in self.symbols:
-            src = create_data_source(self.source_kind)
-            src.connect()
-            src.subscribe(sym, self.timeframe)
-            name = getattr(src, "inst_id", "") or sym
-            self.states[name] = SymbolState(symbol=name, source=src)
+        self.apply_config(self.symbols, self.timeframe)
+
+    def _open_source(self, sym: str, timeframe: str) -> SymbolState:
+        from pa_agent.data.factory import create_data_source
+
+        src = create_data_source(self.source_kind)
+        src.connect()
+        src.subscribe(sym, timeframe)
+        return SymbolState(symbol=getattr(src, "inst_id", "") or sym, source=src)
+
+    def apply_config(self, symbols: list[str], timeframe: str) -> None:
+        """(Re)subscribe to *symbols* on *timeframe*; unchanged symbols keep their state.
+
+        Newly added symbols wait for their next bar close, like at startup.
+        """
+        keep = self.states if timeframe == self.timeframe else {}
+        states: dict[str, SymbolState] = {}
+        for sym in symbols:
+            old = next((st for name, st in keep.items() if name == sym or st.symbol == sym), None)
+            if old is not None:
+                states[old.symbol] = old
+                continue
+            try:
+                st = self._open_source(sym, timeframe)
+            except Exception as exc:
+                logger.error("%s 订阅失败，已跳过: %s", sym, exc)
+                continue
+            states[st.symbol] = st
+        for name, st in self.states.items():
+            if states.get(name) is not st:
+                try:
+                    st.source.disconnect()
+                except Exception:
+                    pass
+        self.states, self.symbols, self.timeframe = states, list(symbols), timeframe
+
+    def sync_config(self) -> None:
+        """Pick up symbols/timeframe saved from the dashboard and report what is running."""
+        if self.store is None:
+            return
+        cfg = read_runner_config(self.store)
+        if cfg is not None and (cfg[0] != self.symbols or cfg[1] != self.timeframe):
+            logger.info("面板修改了分析配置：%s %s → %s %s", ",".join(self.symbols), self.timeframe,
+                        ",".join(cfg[0]), cfg[1])
+            self.apply_config(*cfg)
+            self.store.log_event("runner_config",
+                                 f"后台分析已切换为 {','.join(self.states) or '（无可用品种）'} · {self.timeframe}")
+        self.store.set_kv(RUNNER_ACTIVE_KEY, json.dumps(
+            {"symbols": list(self.states), "timeframe": self.timeframe, "ts_ms": int(time.time() * 1000)}))
 
     # ── orchestration ─────────────────────────────────────────────────────────
 
@@ -247,6 +310,7 @@ class HeadlessRunner:
         while not stop.is_set():
             started = time.monotonic()
             try:
+                self.sync_config()
                 self.poll_once(stop)
             except Exception as exc:
                 logger.exception("轮询异常: %s", exc)
@@ -291,8 +355,17 @@ def main(argv: list[str] | None = None) -> int:
     if not provider_api_key_configured(settings):
         print("AI 模型 API Key 未配置：先在桌面程序「AI 模型设置」里填写，或编辑 config/settings.json")
         return 2
-    symbols = [s.strip() for s in (args.symbols or settings.general.last_symbol).split(",") if s.strip()]
-    timeframe = args.timeframe or settings.general.last_timeframe
+    store = None
+    if args.trade:
+        from pa_agent.config.paths import QUANT_DB_PATH
+        from pa_agent.trading.store import TradeStore
+
+        store = TradeStore(QUANT_DB_PATH)
+    # Precedence: command line > what was last saved from the dashboard > settings.json
+    saved = read_runner_config(store) if store is not None else None
+    symbols = [s.strip() for s in (args.symbols or (",".join(saved[0]) if saved else "")
+                                   or settings.general.last_symbol).split(",") if s.strip()]
+    timeframe = args.timeframe or (saved[1] if saved else "") or settings.general.last_timeframe
     if args.trade:
         err = preflight_trading(settings, i_understand_live=args.i_understand_live)
         if err:
@@ -302,7 +375,10 @@ def main(argv: list[str] | None = None) -> int:
             print("提示：settings.json → trading.enabled 为 false，分析结果不会生成交易信号")
 
     runner = HeadlessRunner(ctx=ctx, symbols=symbols, timeframe=timeframe, source_kind=args.source,
-                            bar_count=args.bars, run_now=args.now or args.once, poll_s=args.poll)
+                            bar_count=args.bars, run_now=args.now or args.once, poll_s=args.poll,
+                            store=store)
+    if store is not None:
+        write_runner_config(store, runner.symbols, runner.timeframe)
     if args.once:
         runner.poll_once()
         return 0

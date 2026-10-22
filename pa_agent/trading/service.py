@@ -182,7 +182,8 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"\n活跃交易 {len(active)} 笔")
     for tr in active:
         print(f"  #{tr['id']} {tr['inst_id']} {tr['direction']} {tr['entry_type']} {tr['state']} "
-              f"{tr['filled_contracts'] or tr['contracts']} 张 入场 {tr['avg_entry'] or tr['planned_entry']} "
+              f"{(tr['filled_contracts'] or tr['contracts']) * tr['ct_val'] * (tr['avg_entry'] or tr['planned_entry'] or 0):,.0f}U "
+              f"入场 {tr['avg_entry'] or tr['planned_entry']} "
               f"止损 {tr['stop_loss']} 止盈 {tr['tp1']}/{tr['tp2']}")
     print("\n最近事件")
     for ev in reversed(store.events(limit=15)):
