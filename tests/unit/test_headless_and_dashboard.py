@@ -249,3 +249,35 @@ def test_equity_reads_skip_legacy_usd_rows(tmp_path):
     assert [(r["total_eq"], r["ccy"]) for r in rows] == [(87477, "USDT")]
     assert store.latest_equity()["total_eq"] == 87477
     assert store.first_equity_since(0)["total_eq"] == 87477
+
+
+def test_dashboard_pagination_and_instrument_filter(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from pa_agent.trading.dashboard import create_app
+
+    store = TradeStore(tmp_path / "q.db")
+    for i in range(7):
+        inst = "ETH-USDT-SWAP" if i % 3 == 0 else "BTC-USDT-SWAP"
+        store.insert_signal(dict(signal_uid=f"u{i}", source="headless", symbol=inst, timeframe="1h",
+                                 direction="long", order_type="none"))
+        store.insert_trade(dict(inst_id=inst, timeframe="1h", direction="long",
+                                entry_type="limit", state="canceled"))
+        store.log_event("note", f"e{i}")
+    c = TestClient(create_app(store, demo=True))
+
+    r = c.get("/api/trades?limit=3&offset=3")
+    assert r.headers["x-total-count"] == "7"
+    assert [t["id"] for t in r.json()] == [4, 3, 2]  # newest first, second page
+    r = c.get("/api/trades?limit=10&inst_id=ETH-USDT-SWAP")
+    assert r.headers["x-total-count"] == "3" and {t["inst_id"] for t in r.json()} == {"ETH-USDT-SWAP"}
+
+    r = c.get("/api/signals?limit=2&offset=0&symbol=BTC-USDT-SWAP")
+    assert r.headers["x-total-count"] == "4" and len(r.json()) == 2
+
+    r = c.get("/api/events?limit=2&offset=5")
+    assert r.headers["x-total-count"] == "7"
+    assert [e["message"] for e in r.json()] == ["e1", "e0"]
+
+    assert sorted(c.get("/api/instruments").json()) == ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]

@@ -27,7 +27,7 @@ def _loads(text: str | None) -> Any:
 
 def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Path | None = None,
                market: Any = None):
-    from fastapi import Body, Depends, FastAPI, HTTPException, Request
+    from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
     from fastapi.responses import FileResponse, HTMLResponse
 
     from pa_agent.config.paths import TRADE_RECORDS_DIR
@@ -86,9 +86,12 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
         return rows[::step] + ([rows[-1]] if rows and (len(rows) - 1) % step else [])
 
     @app.get("/api/trades", dependencies=guard)
-    def trades(limit: int = 200, offset: int = 0, state: str = "") -> list[dict[str, Any]]:
+    def trades(response: Response, limit: int = 200, offset: int = 0, state: str = "",
+               inst_id: str = "") -> list[dict[str, Any]]:
         states = tuple(s for s in state.split(",") if s) or None
-        rows = store.list_trades(states=states, limit=min(limit, 2000), offset=offset)
+        response.headers["X-Total-Count"] = str(store.count_trades(states=states, inst_id=inst_id or None))
+        rows = store.list_trades(states=states, limit=min(limit, 2000), offset=max(0, offset),
+                                 inst_id=inst_id or None)
         sig_ids = {r["signal_id"] for r in rows if r.get("signal_id")}
         conf: dict[int, dict[str, Any]] = {}
         for sid in sig_ids:
@@ -111,8 +114,10 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
         return {"trade": t, "signal": sig, "events": store.events(trade_id=trade_id)}
 
     @app.get("/api/signals", dependencies=guard)
-    def signals(limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
-        return store.list_signals(limit=min(limit, 2000), offset=offset)
+    def signals(response: Response, limit: int = 200, offset: int = 0,
+                symbol: str = "") -> list[dict[str, Any]]:
+        response.headers["X-Total-Count"] = str(store.count_signals(symbol or None))
+        return store.list_signals(limit=min(limit, 2000), offset=max(0, offset), symbol=symbol or None)
 
     @app.get("/api/signals/{signal_id}", dependencies=guard)
     def signal_detail(signal_id: int) -> dict[str, Any]:
@@ -129,8 +134,13 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
         return ai_quality(trades, sigs, list(sigs.values()))
 
     @app.get("/api/events", dependencies=guard)
-    def events(limit: int = 100) -> list[dict[str, Any]]:
-        return store.events(limit=min(limit, 1000))
+    def events(response: Response, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        response.headers["X-Total-Count"] = str(store.count_events())
+        return store.events(limit=min(limit, 1000), offset=max(0, offset))
+
+    @app.get("/api/instruments", dependencies=guard)
+    def instruments() -> list[str]:
+        return store.instruments()
 
     @app.get("/api/candles", dependencies=guard)
     def candles(inst_id: str, timeframe: str = "1h", limit: int = 300) -> dict[str, Any]:

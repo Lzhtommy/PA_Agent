@@ -208,13 +208,20 @@ class TradeStore:
     def get_signal(self, signal_id: int) -> dict[str, Any] | None:
         return self._row("SELECT * FROM signals WHERE id=?", (signal_id,))
 
-    def list_signals(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+    def list_signals(self, limit: int = 200, offset: int = 0,
+                     symbol: str | None = None) -> list[dict[str, Any]]:
+        where, params = ("WHERE symbol=? ", [symbol]) if symbol else ("", [])
         return self._rows(
             "SELECT id, signal_uid, created_ms, source, symbol, timeframe, direction, "
             "order_type, entry, stop_loss, tp1, tp2, trade_confidence, estimated_win_rate, "
-            "status, status_reason, chart_image FROM signals ORDER BY id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            f"status, status_reason, chart_image FROM signals {where}ORDER BY id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         )
+
+    def count_signals(self, symbol: str | None = None) -> int:
+        if symbol:
+            return self._row("SELECT COUNT(*) AS n FROM signals WHERE symbol=?", (symbol,))["n"]
+        return self._row("SELECT COUNT(*) AS n FROM signals")["n"]
 
     # ── trades ────────────────────────────────────────────────────────────────
 
@@ -246,18 +253,38 @@ class TradeStore:
             )
         return self._rows("SELECT * FROM trades WHERE state IN ('pending','open') ORDER BY id")
 
-    def list_trades(
-        self, *, states: tuple[str, ...] | None = None, limit: int = 500, offset: int = 0
-    ) -> list[dict[str, Any]]:
+    @staticmethod
+    def _trade_filter(states: tuple[str, ...] | None, inst_id: str | None) -> tuple[str, list[Any]]:
+        clauses, params = [], []
         if states:
-            marks = ", ".join("?" * len(states))
-            return self._rows(
-                f"SELECT * FROM trades WHERE state IN ({marks}) ORDER BY id DESC LIMIT ? OFFSET ?",
-                (*states, limit, offset),
-            )
+            clauses.append(f"state IN ({', '.join('?' * len(states))})")
+            params += states
+        if inst_id:
+            clauses.append("inst_id=?")
+            params.append(inst_id)
+        return ("WHERE " + " AND ".join(clauses) + " " if clauses else ""), params
+
+    def list_trades(
+        self, *, states: tuple[str, ...] | None = None, limit: int = 500, offset: int = 0,
+        inst_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = self._trade_filter(states, inst_id)
         return self._rows(
-            "SELECT * FROM trades ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
+            f"SELECT * FROM trades {where}ORDER BY id DESC LIMIT ? OFFSET ?", (*params, limit, offset)
         )
+
+    def count_trades(self, *, states: tuple[str, ...] | None = None, inst_id: str | None = None) -> int:
+        where, params = self._trade_filter(states, inst_id)
+        return self._row(f"SELECT COUNT(*) AS n FROM trades {where}", params)["n"]
+
+    def instruments(self) -> list[str]:
+        """Every instrument that has a trade or a signal, most recently used first."""
+        rows = self._rows(
+            "SELECT name FROM (SELECT inst_id AS name, MAX(created_ms) AS ts FROM trades GROUP BY inst_id "
+            "UNION ALL SELECT symbol, MAX(created_ms) FROM signals GROUP BY symbol) "
+            "WHERE name != '' GROUP BY name ORDER BY MAX(ts) DESC"
+        )
+        return [r["name"] for r in rows]
 
     def closed_trades_since(self, since_ms: int) -> list[dict[str, Any]]:
         return self._rows(
@@ -282,12 +309,17 @@ class TradeStore:
             (now_ms(), trade_id, signal_id, level, kind, message),
         )
 
-    def events(self, *, trade_id: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def events(self, *, trade_id: int | None = None, limit: int = 200,
+               offset: int = 0) -> list[dict[str, Any]]:
         if trade_id is not None:
             return self._rows(
-                "SELECT * FROM events WHERE trade_id=? ORDER BY id DESC LIMIT ?", (trade_id, limit)
+                "SELECT * FROM events WHERE trade_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (trade_id, limit, offset),
             )
-        return self._rows("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
+        return self._rows("SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
+
+    def count_events(self) -> int:
+        return self._row("SELECT COUNT(*) AS n FROM events")["n"]
 
     # ── equity ────────────────────────────────────────────────────────────────
 

@@ -47,6 +47,11 @@ input[type=text] { background: var(--panel-2); color: var(--text); border: 1px s
 .runner-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .runner-form input { flex: 1 1 260px; }
 .runner-form button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap;
+  margin-top: 10px; color: var(--muted); font-size: 12px; }
+.pager button { padding: 3px 10px; font-size: 12px; }
+.pager button:disabled { opacity: .4; cursor: default; filter: none; }
+.pager .new { color: var(--accent); cursor: pointer; margin-right: auto; }
 .kline-ctl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-weight: 400; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button.active { background: var(--accent); border-color: var(--accent); }
@@ -123,8 +128,10 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
   </div>
 
   <div class="card">
-    <h2>交易明细 <span class="hint">点击一行查看 AI 当时的分析</span></h2>
+    <h2>交易明细 <span class="kline-ctl"><span class="hint">点击一行查看 AI 当时的分析</span>
+      <select class="instFilter"></select></span></h2>
     <div class="table-wrap"><table id="tradesTbl"></table></div>
+    <div class="pager" id="tradesPager"></div>
   </div>
 
   <div class="card">
@@ -135,13 +142,16 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
   </div>
 
   <div class="card">
-    <h2>信号记录 <span class="hint">每次分析的结论，以及执行器怎么处理的</span></h2>
+    <h2>信号记录 <span class="kline-ctl"><span class="hint">每次分析的结论，以及执行器怎么处理的</span>
+      <select class="instFilter"></select></span></h2>
     <div class="table-wrap"><table id="sigTbl"></table></div>
+    <div class="pager" id="sigPager"></div>
   </div>
 
   <div class="card">
     <h2>系统事件</h2>
     <div class="table-wrap"><table id="evTbl"></table></div>
+    <div class="pager" id="evPager"></div>
   </div>
 </main>
 
@@ -230,11 +240,84 @@ async function loadEquity() {
   eqChart = lineChart(eqChart, $("eqChart"), rows.map((r) => ts(r.ts_ms)), rows.map((r) => r.total_eq), css("--accent"));
 }
 
-async function loadTrades() {
-  const rows = await api("/api/trades?limit=500");
-  const closed = rows.filter((r) => r.state === "closed" && r.net_pnl != null).sort((a, b) => a.closed_ms - b.closed_ms);
+// ── 分页：第 1 页随自动刷新显示最新；翻到后面时锁定位置，新记录只提示不打乱 ──
+const PAGE_SIZE = 30;
+let instFilter = "";
+const pagers = {};
+
+async function apiPaged(path) {
+  const headers = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
+  const r = await fetch(path, { headers });
+  if (!r.ok) throw new Error(r.status + " " + path);
+  return { rows: await r.json(), total: +(r.headers.get("X-Total-Count") || 0) };
+}
+
+function pager(key, el, reload) {
+  return pagers[key] ||= { page: 1, total: 0, anchor: null, el, reload };
+}
+
+// anchor = 离开第 1 页时的总数；之后新增的记录会让偏移量相应后移
+async function fetchPage(p, path) {
+  const sep = path.includes("?") ? "&" : "?";
+  let shift = p.anchor == null ? 0 : p.total - p.anchor;
+  for (let i = 0; i < 2; i++) {
+    const res = await apiPaged(`${path}${sep}limit=${PAGE_SIZE}&offset=${(p.page - 1) * PAGE_SIZE + shift}`);
+    p.total = res.total;
+    const actual = p.anchor == null ? 0 : p.total - p.anchor;
+    if (actual === shift) return res.rows;
+    shift = actual;
+  }
+  return (await apiPaged(`${path}${sep}limit=${PAGE_SIZE}&offset=${(p.page - 1) * PAGE_SIZE + shift}`)).rows;
+}
+
+function renderPager(p) {
+  const base = p.anchor ?? p.total;
+  const pages = Math.max(1, Math.ceil(base / PAGE_SIZE));
+  const fresh = p.anchor == null ? 0 : p.total - p.anchor;
+  p.el.innerHTML = (fresh > 0 ? `<span class="new" data-go="1">有 ${fresh} 条新记录，回到第 1 页查看</span>` : "") +
+    `<span>共 ${p.total} 条 · 第 ${p.page} / ${pages} 页</span>` +
+    `<button data-go="${p.page - 1}" ${p.page <= 1 ? "disabled" : ""}>上一页</button>` +
+    `<button data-go="${p.page + 1}" ${p.page >= pages ? "disabled" : ""}>下一页</button>`;
+  p.el.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => {
+    const go = +b.dataset.go;
+    if (go < 1 || go > pages) return;
+    if (go === 1) p.anchor = null;
+    else if (p.anchor == null) p.anchor = p.total;
+    p.page = go;
+    p.reload().catch(() => {});
+  });
+}
+
+function resetPager(key) { if (pagers[key]) Object.assign(pagers[key], { page: 1, anchor: null }); }
+
+async function loadInstFilter() {
+  const list = await api("/api/instruments");
+  document.querySelectorAll(".instFilter").forEach((sel) => {
+    const want = ["", ...list];
+    if (sel.options.length === want.length && [...sel.options].every((o, i) => o.value === want[i])) return;
+    sel.innerHTML = `<option value="">全部品种</option>` +
+      list.map((i) => `<option value="${esc(i)}">${esc(i.replace("-SWAP", ""))}</option>`).join("");
+    sel.value = want.includes(instFilter) ? instFilter : "";
+  });
+}
+document.querySelectorAll(".instFilter").forEach((sel) => sel.onchange = () => {
+  instFilter = sel.value;
+  document.querySelectorAll(".instFilter").forEach((o) => { o.value = instFilter; });
+  resetPager("trades"); resetPager("sig");
+  loadTrades().catch(() => {}); loadSignals().catch(() => {});
+});
+
+async function loadPnlChart() {
+  const closed = (await api("/api/trades?state=closed&limit=2000"))
+    .filter((r) => r.net_pnl != null).sort((a, b) => a.closed_ms - b.closed_ms);
   let acc = 0;
   pnlChart = lineChart(pnlChart, $("pnlChart"), closed.map((r) => "#" + r.id), closed.map((r) => (acc += r.net_pnl)), css("--up"));
+}
+
+async function loadTrades() {
+  const p = pager("trades", $("tradesPager"), loadTrades);
+  const rows = await fetchPage(p, `/api/trades${instFilter ? "?inst_id=" + encodeURIComponent(instFilter) : ""}`);
+  renderPager(p);
   table($("tradesTbl"), [
     ["#", (r) => r.id], ["开仓时间", (r) => ts(r.opened_ms || r.created_ms)], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))],
     ["周期", (r) => esc(r.timeframe)], ["方向", (r) => dirLabel(r.direction)], ["入场方式", (r) => entryLabel[r.entry_type] || r.entry_type],
@@ -259,7 +342,9 @@ function renderQuality() {
 async function loadQuality() { qData = await api("/api/ai-quality"); renderQuality(); }
 
 async function loadSignals() {
-  const rows = await api("/api/signals?limit=200");
+  const p = pager("sig", $("sigPager"), loadSignals);
+  const rows = await fetchPage(p, `/api/signals${instFilter ? "?symbol=" + encodeURIComponent(instFilter) : ""}`);
+  renderPager(p);
   table($("sigTbl"), [
     ["#", (r) => r.id], ["时间", (r) => ts(r.created_ms)], ["来源", (r) => esc(r.source)], ["品种", (r) => esc(r.symbol)],
     ["周期", (r) => esc(r.timeframe)], ["结论", (r) => r.order_type === "none" ? '<span class="muted">不下单</span>' : dirLabel(r.direction) + " " + entryLabel[r.order_type]],
@@ -269,7 +354,9 @@ async function loadSignals() {
 }
 
 async function loadEvents() {
-  const rows = await api("/api/events?limit=80");
+  const p = pager("ev", $("evPager"), loadEvents);
+  const rows = await fetchPage(p, "/api/events");
+  renderPager(p);
   table($("evTbl"), [["时间", (r) => ts(r.ts_ms)], ["交易", (r) => r.trade_id ?? "—"],
     ["级别", (r) => `<span class="${r.level === "error" ? "down" : r.level === "warn" ? "" : "muted"}" style="${r.level === "warn" ? "color:var(--warn)" : ""}">${r.level}</span>`],
     ["类型", (r) => esc(r.kind)], ["内容", (r) => `<span style="white-space:normal">${esc(r.message)}</span>`]], rows);
@@ -472,8 +559,9 @@ $("klineTf").onchange = () => loadKline().catch(() => {});
 
 async function refresh() {
   try {
+    await loadInstFilter();
     const [sigs] = await Promise.all([api("/api/signals?limit=50"), loadOverview(), loadEquity(), loadTrades(),
-      loadQuality(), loadSignals(), loadEvents(), loadRunner()]);
+      loadPnlChart(), loadQuality(), loadSignals(), loadEvents(), loadRunner()]);
     const runCfg = runnerCfg && (runnerCfg.config || runnerCfg.active);
     if (!$("klineInst").options.length) $("klineTf").value = runCfg?.timeframe || sigs[0]?.timeframe || "1h";
     klineOptions([...(runCfg?.symbols || []), ...sigs.map((s) => s.symbol)]);
