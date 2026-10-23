@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pa_agent.ai.claude_cli_client import is_claude_cli_model
 from pa_agent.ai.cursor_connector import is_openclaw_cs_model
 from pa_agent.ai.qoder_connector import is_openclaw_qc_model
 from pa_agent.ai.trae_connector import is_openclaw_twc_model
@@ -16,8 +17,15 @@ def create_ai_client(
     logger_: logging.Logger | None = None,
 ) -> Any:
     """Return CursorSdkClient for ``openclaw_cs*``, TraeClient for
-    ``openclaw_twc*``, QoderClient for ``openclaw_qc*``, else DeepSeekClient."""
+    ``openclaw_twc*``, QoderClient for ``openclaw_qc*``, ClaudeCliClient for
+    ``claude_cli*``, else DeepSeekClient."""
     log = logger_ or logging.getLogger(__name__)
+    if is_claude_cli_model(settings.model):
+        from pa_agent.ai.claude_cli_client import ClaudeCliClient
+
+        log.info("AI client route: Claude Code CLI (model=%s)", settings.model)
+        return ClaudeCliClient(settings=settings, logger_=log)
+
     if is_openclaw_cs_model(settings.model):
         from pa_agent.ai.cursor_sdk_client import CursorSdkClient
 

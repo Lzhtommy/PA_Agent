@@ -212,9 +212,16 @@ class Settings(BaseModel):
 
 
 def provider_api_key_configured(settings: Settings | None) -> bool:
-    """Return True when a non-empty API key is loaded in memory."""
+    """Return True when a non-empty API key is loaded in memory.
+
+    The Claude Code CLI route needs no key: it uses the CLI's own login.
+    """
     if settings is None:
         return False
+    from pa_agent.ai.claude_cli_client import is_claude_cli_model
+
+    if is_claude_cli_model(settings.provider.model):
+        return True
     return bool((settings.provider.api_key or "").strip())
 
 

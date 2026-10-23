@@ -136,6 +136,11 @@ def supports_kv_prefix_chain(settings: AIProviderSettings | None) -> bool:
     """
     if settings is None:
         return True
+    from pa_agent.ai.claude_cli_client import is_claude_cli_model
+
+    if is_claude_cli_model(settings.model):
+        # ClaudeCliClient resumes the Stage 1 CLI session for the chained turn.
+        return True
     if _is_qclaw_openclaw_agent(settings) or _is_workbuddy_agent(settings):
         return False
     if _is_openclaw_agent_model(settings.model):
