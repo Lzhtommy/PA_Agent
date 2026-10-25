@@ -15,7 +15,7 @@ Policy (first version, deliberately conservative):
 - One trade per instrument. Signals never add to or reverse an open position —
   exits happen only through the stop / take-profit orders.
 - The latest analysis supersedes a resting entry: a different plan replaces it,
-  a 不下单 decision cancels it.
+  a 不下单 decision leaves it to expire.
 
 Safety invariants:
 - A trade only leaves ``pending`` once the exchange confirms the entry is
@@ -485,7 +485,8 @@ class Executor:
             # OKX arms the attached stop only after a *complete* fill — protect
             # the filled part ourselves meanwhile.
             if status.filled != (trade["filled_contracts"] or 0):
-                self.store.update_trade(tid, filled_contracts=status.filled)
+                self.store.update_trade(tid, filled_contracts=status.filled,
+                                        opened_ms=trade["opened_ms"] or status.fill_ms or now_ms())
                 self._event(tid, "entry_partial", f"入场部分成交 {_usdt(status.filled, trade['ct_val'], status.avg_px or trade['planned_entry'])}，先为已成交部分挂止损")
             self._sync_stop(self.store.get_trade(tid) or trade, status.filled)
         if expired:
@@ -497,9 +498,12 @@ class Executor:
         tid = trade["id"]
         filled = float(status.filled or trade["contracts"])
         avg = status.avg_px or trade["planned_entry"]
+        # A partial fill already opened the position; OKX positions-history dates it
+        # from that first fill, and _finalize matches on it.
+        opened = trade["opened_ms"] or status.fill_ms or now_ms()
         self.store.update_trade(
             tid, state="open", filled_contracts=filled, remaining_contracts=filled,
-            avg_entry=avg, opened_ms=status.fill_ms or now_ms(), expires_ms=None, close_reason="",
+            avg_entry=avg, opened_ms=opened, expires_ms=None, close_reason="",
         )
         self._event(tid, "entry_filled", f"入场成交 {_usdt(filled, trade['ct_val'], avg)} @ {_px(avg)}")
         trade = self.store.get_trade(tid) or trade

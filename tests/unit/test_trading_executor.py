@@ -57,6 +57,7 @@ class FakeBroker:
     fail_close: bool = False
     fail_tp: bool = False
     entry_network_error: bool = False
+    fill_ms: int = 123
     closed_calls: int = 0
     _n: int = 0
 
@@ -124,7 +125,7 @@ class FakeBroker:
         o = self.orders.get(cl_ord_id)
         if o is None:
             raise OkxError("51603", "order does not exist")
-        return OrderStatus(state=o.state, filled=o.filled, avg_px=o.avg, fill_ms=123 if o.filled else None)
+        return OrderStatus(state=o.state, filled=o.filled, avg_px=o.avg, fill_ms=self.fill_ms if o.filled else None)
 
     def cancel_order(self, inst_id, cl_ord_id):
         self.orders[cl_ord_id].state = "canceled"
@@ -473,6 +474,25 @@ def test_partial_fill_while_pending_is_protected(env):
     live = broker.live_stops()
     assert store.get_trade(trade["id"])["state"] == "pending"
     assert len(live) == 1 and live[0].size == pytest.approx(1.0)
+
+
+def test_opened_time_is_first_partial_fill(env):
+    # OKX positions-history dates the position from its first fill; settling PnL
+    # matches on opened_ms, so a later full fill must not move it.
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    trade = store.active_trades()[0]
+    order = broker.orders[trade["entry_cl_ord_id"]]
+    broker.fill_ms = 1_000
+    broker._fill(order, 99.0, size=1.0)
+    ex.tick()
+    broker.fill_ms = 3_600_000
+    broker._fill(order, 99.0)
+    ex.tick()
+    trade = store.get_trade(trade["id"])
+    assert trade["state"] == "open"
+    assert trade["opened_ms"] == 1_000
 
 
 def test_partial_promotion_blocks_new_entry(env):

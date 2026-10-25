@@ -178,8 +178,11 @@ class TradingSettings(BaseModel):
     #: Reject signals with trade_confidence below this (0 = no gate).
     min_trade_confidence: int = Field(default=0, ge=0, le=100)
     #: Stop distance sanity band as % of entry price.
-    min_stop_distance_pct: float = Field(default=0.05, ge=0)
+    min_stop_distance_pct: float = Field(default=0.3, ge=0)
     max_stop_distance_pct: float = Field(default=8.0, gt=0)
+    #: Round-trip fees + stop slippage as % of entry, added to the stop distance when
+    #: sizing so a stop-out loses ~risk_per_trade_pct all-in (OKX demo: ~0.07% + slip).
+    fee_buffer_pct: float = Field(default=0.1, ge=0, le=5)
     #: Cancel an unfilled limit / breakout entry after this many bars.
     pending_expiry_bars: int = Field(default=3, ge=1, le=100)
     #: Fraction of the position closed at TP1 (rest at TP2). 1.0 = all at TP1.

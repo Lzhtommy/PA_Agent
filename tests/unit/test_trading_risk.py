@@ -43,7 +43,7 @@ def test_limit_plan_ok():
         (dict(stop_loss=101.0), 102.0, "不在入场价"),
         (dict(tp1=99.0), 101.0, "盈利方向"),
         (dict(tp1=101.0), 101.5, "盈亏比"),
-        (dict(stop_loss=99.99), 101.0, "过近"),
+        (dict(stop_loss=99.8), 101.0, "过近"),
         (dict(stop_loss=80.0, tp1=150.0), 101.0, "过远"),
         (dict(), 97.0, "已越过止损"),
     ],
@@ -81,9 +81,19 @@ def test_marketable_limit_becomes_market():
 
 def test_size_position_risk_based():
     plan = EntryPlan("long", "limit", 100_000.0, 99_000.0, 102_000.0, None, 2.0)
-    contracts, risk = size_position(equity=10_000, avail=10_000, plan=plan, spec=BTC, cfg=CFG)
+    cfg = RiskConfig(fee_buffer_pct=0)
+    contracts, risk = size_position(equity=10_000, avail=10_000, plan=plan, spec=BTC, cfg=cfg)
     # risk 100U / (1000 * 0.01) = 10 contracts → capped by leverage 5: 50_000 / 1000 = 50 → 10
     assert contracts == pytest.approx(10.0)
+    assert risk == pytest.approx(100.0)
+
+
+def test_size_position_budgets_fees_into_risk():
+    plan = EntryPlan("long", "limit", 100_000.0, 99_000.0, 102_000.0, None, 2.0)
+    cfg = RiskConfig(fee_buffer_pct=0.25)
+    contracts, risk = size_position(equity=10_000, avail=10_000, plan=plan, spec=BTC, cfg=cfg)
+    # per contract: (1000 stop + 250 fees) * 0.01 = 12.5U → 100U / 12.5 = 8 contracts
+    assert contracts == pytest.approx(8.0)
     assert risk == pytest.approx(100.0)
 
 

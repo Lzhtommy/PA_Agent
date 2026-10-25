@@ -34,8 +34,9 @@ class RiskConfig:
     leverage: int = 5
     min_reward_risk: float = 1.0
     min_trade_confidence: int = 0
-    min_stop_distance_pct: float = 0.05
+    min_stop_distance_pct: float = 0.3
     max_stop_distance_pct: float = 8.0
+    fee_buffer_pct: float = 0.1
     max_daily_loss_pct: float = 3.0
     max_open_positions: int = 1
     tp1_close_fraction: float = 0.5
@@ -49,6 +50,7 @@ class RiskConfig:
             min_trade_confidence=int(t.min_trade_confidence),
             min_stop_distance_pct=float(t.min_stop_distance_pct),
             max_stop_distance_pct=float(t.max_stop_distance_pct),
+            fee_buffer_pct=float(t.fee_buffer_pct),
             max_daily_loss_pct=float(t.max_daily_loss_pct),
             max_open_positions=int(t.max_open_positions),
             tp1_close_fraction=float(t.tp1_close_fraction),
@@ -175,13 +177,19 @@ def size_position(
     spec: InstrumentSpec,
     cfg: RiskConfig,
 ) -> tuple[float, float]:
-    """Return ``(contracts, risk_amount)``; raise :class:`RiskRejected` if too small."""
+    """Return ``(contracts, risk_amount)``; raise :class:`RiskRejected` if too small.
+
+    The loss budgeted per contract is the stop distance plus ``fee_buffer_pct`` of
+    the entry price (round-trip fees + stop slippage), so a stop-out costs about
+    ``risk_per_trade_pct`` of equity all-in rather than before costs.
+    """
     if equity <= 0:
         raise RiskRejected("账户权益为 0")
     risk_amount = equity * cfg.risk_per_trade_pct / 100
-    loss_per_contract = abs(plan.entry - plan.stop_loss) * spec.ct_val
-    if loss_per_contract <= 0:
+    stop_distance = abs(plan.entry - plan.stop_loss)
+    if stop_distance <= 0:
         raise RiskRejected("止损距离为 0")
+    loss_per_contract = (stop_distance + plan.entry * cfg.fee_buffer_pct / 100) * spec.ct_val
     contracts = risk_amount / loss_per_contract
 
     notional_per_contract = plan.entry * spec.ct_val
