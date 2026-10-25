@@ -218,9 +218,9 @@ class TradeStore:
 
     @staticmethod
     def _version_clause(version: str | None) -> tuple[str, list[Any]]:
-        """``version`` is ``"model|prompt_hash"`` (as returned by :meth:`versions`)."""
-        model, _, phash = (version or "").partition("|")
-        return "model=? AND prompt_hash=?", [model, phash]
+        """``version`` is ``"model|prompt_hash|timeframe"`` (as returned by :meth:`versions`)."""
+        model, phash, timeframe = ((version or "").split("|") + ["", ""])[:3]
+        return "model=? AND prompt_hash=? AND timeframe=?", [model, phash, timeframe]
 
     def _signal_filter(self, symbol: str | None, actionable: bool,
                        version: str | None) -> tuple[str, list[Any]]:
@@ -253,13 +253,15 @@ class TradeStore:
         return self._row(f"SELECT COUNT(*) AS n FROM signals {where}", params)["n"]
 
     def versions(self) -> list[dict[str, Any]]:
-        """Strategy versions seen in signals, most recent first, with sample sizes."""
+        """Strategy versions (model, prompt hash, timeframe) seen in signals, most
+        recent first, with sample sizes."""
         return self._rows(
-            "SELECT s.model, s.prompt_hash, MIN(s.created_ms) AS first_ms, MAX(s.created_ms) AS last_ms, "
-            "COUNT(*) AS signals, SUM(s.order_type != 'none') AS orders, "
+            "SELECT s.model, s.prompt_hash, s.timeframe, MIN(s.created_ms) AS first_ms, "
+            "MAX(s.created_ms) AS last_ms, COUNT(*) AS signals, SUM(s.order_type != 'none') AS orders, "
             "(SELECT COUNT(*) FROM trades t JOIN signals s2 ON s2.id = t.signal_id "
-            " WHERE t.state = 'closed' AND s2.model = s.model AND s2.prompt_hash = s.prompt_hash) AS closed "
-            "FROM signals s GROUP BY s.model, s.prompt_hash ORDER BY last_ms DESC"
+            " WHERE t.state = 'closed' AND s2.model = s.model AND s2.prompt_hash = s.prompt_hash "
+            " AND s2.timeframe = s.timeframe) AS closed "
+            "FROM signals s GROUP BY s.model, s.prompt_hash, s.timeframe ORDER BY last_ms DESC"
         )
 
     # ── trades ────────────────────────────────────────────────────────────────

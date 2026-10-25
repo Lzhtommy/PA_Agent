@@ -84,15 +84,18 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
 
     @app.get("/api/versions", dependencies=guard)
     def versions() -> list[dict[str, Any]]:
+        from pa_agent.headless import read_runner_config
         from pa_agent.trading.signals import prompt_hash
 
         try:
             current = prompt_hash()
         except OSError:
             current = ""
-        return [{**v, "key": f"{v['model']}|{v['prompt_hash']}",
-                 "label": version_label(v["model"], v["prompt_hash"]),
-                 "current": bool(current) and v["prompt_hash"] == current}
+        runner = read_runner_config(store)
+        return [{**v, "key": f"{v['model']}|{v['prompt_hash']}|{v['timeframe']}",
+                 "label": version_label(v["model"], v["prompt_hash"], v["timeframe"]),
+                 "current": bool(current) and v["prompt_hash"] == current
+                 and (runner is None or v["timeframe"] == runner[1])}
                 for v in store.versions()]
 
     @app.get("/api/equity", dependencies=guard)
@@ -124,7 +127,7 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
                 conf[sid] = {"trade_confidence": s["trade_confidence"],
                              "estimated_win_rate": s["estimated_win_rate"],
                              "timeframe": s["timeframe"],
-                             "version": version_label(s["model"], s["prompt_hash"])}
+                             "version": version_label(s["model"], s["prompt_hash"], s["timeframe"])}
         return [{**r, **conf.get(r.get("signal_id") or -1, {})} for r in rows]
 
     @app.get("/api/trades/{trade_id}", dependencies=guard)
@@ -157,10 +160,10 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
     @app.get("/api/ai-quality", dependencies=guard)
     def quality(days: int = 0, version: str = "") -> dict[str, Any]:
         sigs = {r["id"]: r for r in store._rows("SELECT * FROM signals")}
-        model, _, phash = version.partition("|")
+        want = tuple((version.split("|") + ["", ""])[:3])
         since = since_ms(days)
         in_scope = [s for s in sigs.values() if s["created_ms"] >= since
-                    and (not version or (s["model"], s["prompt_hash"]) == (model, phash))]
+                    and (not version or (s["model"], s["prompt_hash"], s["timeframe"]) == want)]
         return ai_quality(stat_trades(days, version), sigs, in_scope)
 
     @app.get("/api/events", dependencies=guard)

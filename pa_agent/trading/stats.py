@@ -141,7 +141,7 @@ def ai_quality(trades: list[dict[str, Any]], signals_by_id: dict[int, dict[str, 
 
     by_cycle = by(cycle)
     by_exit = _group_stats([(t.get("close_reason") or "未知", t) for t in closed])
-    by_version = by(lambda t, s: version_label(s.get("model"), s.get("prompt_hash")))
+    by_version = by(lambda t, s: version_label(s.get("model"), s.get("prompt_hash"), s.get("timeframe")))
     orders = [s for s in (signal_status or []) if s.get("order_type") not in (None, "none")]
     funnel = Counter((s.get("status") or "?") for s in orders)
     return {
@@ -158,10 +158,12 @@ def ai_quality(trades: list[dict[str, Any]], signals_by_id: dict[int, dict[str, 
     }
 
 
-def version_label(model: str | None, prompt_hash: str | None) -> str:
-    """Human label for a strategy version (model + prompt hash)."""
+def version_label(model: str | None, prompt_hash: str | None, timeframe: str | None = None) -> str:
+    """Human label for a strategy version (model + prompt hash + timeframe)."""
     if not model:
-        return "未标记"
-    if prompt_hash in (None, "", "legacy"):
-        return f"{model} · 旧版本"
-    return f"{model} · {prompt_hash}"
+        label = "未标记"
+    elif prompt_hash in (None, "", "legacy"):
+        label = f"{model} · 旧版本"
+    else:
+        label = f"{model} · {prompt_hash}"
+    return f"{label} · {timeframe}" if timeframe else label

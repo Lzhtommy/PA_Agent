@@ -310,9 +310,9 @@ def test_dashboard_filters_by_strategy_version(tmp_path):
 
     c = TestClient(create_app(_versioned_store(tmp_path), demo=True))
     versions = {v["label"]: v for v in c.get("/api/versions").json()}
-    sonnet = versions["claude_cli/sonnet · abcd1234"]
+    sonnet = versions["claude_cli/sonnet · abcd1234 · 1h"]
     assert sonnet["closed"] == 2 and sonnet["signals"] == 3 and sonnet["orders"] == 2
-    assert versions["deepseek-flash · 旧版本"]["closed"] == 1
+    assert versions["deepseek-flash · 旧版本 · 1h"]["closed"] == 1
 
     v = "version=" + sonnet["key"]
     s = c.get(f"/api/overview?{v}").json()["summary"]
@@ -321,7 +321,7 @@ def test_dashboard_filters_by_strategy_version(tmp_path):
     assert c.get(f"/api/signals?{v}").headers["x-total-count"] == "3"
     assert c.get(f"/api/signals?{v}&actionable=true").headers["x-total-count"] == "2"
     q = c.get(f"/api/ai-quality?{v}").json()
-    assert [g["group"] for g in q["by_version"]] == ["claude_cli/sonnet · abcd1234"]
+    assert [g["group"] for g in q["by_version"]] == ["claude_cli/sonnet · abcd1234 · 1h"]
     assert q["signals_total"] == 3 and q["signals_actionable"] == 2
     assert c.get("/api/overview").json()["summary"]["trades"] == 3
 
@@ -336,3 +336,25 @@ def test_summary_drawdown_uses_realised_pnl():
     assert s["max_drawdown_pct"] == pytest.approx(250 / 10_200 * 100)
     assert s["max_drawdown_r"] == pytest.approx(2.5)
     assert s["return_pct"] == pytest.approx(0.0)
+
+
+def test_timeframe_is_part_of_strategy_version(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from pa_agent.headless import write_runner_config
+    from pa_agent.trading.dashboard import create_app
+    from pa_agent.trading.signals import prompt_hash
+
+    store = _versioned_store(tmp_path)
+    phash = prompt_hash()
+    for tf in ("1h", "4h"):
+        store.insert_signal(dict(signal_uid=f"tf{tf}", symbol="BTC-USDT-SWAP", timeframe=tf,
+                                 order_type="none", model="claude_cli/sonnet", prompt_hash=phash))
+    write_runner_config(store, ["BTC-USDT-SWAP"], "4h")
+    c = TestClient(create_app(store, demo=True))
+    versions = {v["label"]: v for v in c.get("/api/versions").json()}
+    assert versions[f"claude_cli/sonnet · {phash} · 4h"]["current"] is True
+    assert versions[f"claude_cli/sonnet · {phash} · 1h"]["current"] is False
+    key_4h = versions[f"claude_cli/sonnet · {phash} · 4h"]["key"]
+    assert c.get(f"/api/signals?version={key_4h}").headers["x-total-count"] == "1"
