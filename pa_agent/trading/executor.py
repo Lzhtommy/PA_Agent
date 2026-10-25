@@ -153,6 +153,7 @@ class Executor:
             self._kill_step()
         else:
             self.store.set_kv(KILL_DONE_KEY, "0")
+        self._handle_cancel_requests()
         # Manage existing trades before taking new signals so a bad signal can
         # never starve stop / exit management.
         for trade in self.store.active_trades():
@@ -173,6 +174,23 @@ class Executor:
         if t - self._last_reconcile_ms >= RECONCILE_INTERVAL_MS:
             self._reconcile()
             self._last_reconcile_ms = t
+
+    def _handle_cancel_requests(self) -> None:
+        """Cancel resting entries the dashboard asked for (retried until confirmed)."""
+        for tid in self.store.cancel_requests():
+            trade = self.store.get_trade(tid)
+            if trade is None or trade["state"] != "pending":
+                self.store.clear_cancel_request(tid)
+                if trade is not None and trade["state"] == "open":
+                    self._event(tid, "cancel_skip", "手动撤单未执行：入场单已成交，按持仓管理", level="warn")
+                continue
+            try:
+                done = self._cancel_pending(trade, "面板手动撤单")
+            except OkxError as exc:
+                self._event(tid, "cancel_error", f"手动撤单失败（下轮重试）: {exc}", level="warn")
+                continue
+            if done:
+                self.store.clear_cancel_request(tid)
 
     def _event(self, trade_id: int | None, kind: str, msg: str, *, level: str = "info",
                signal_id: int | None = None) -> None:

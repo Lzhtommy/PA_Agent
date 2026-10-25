@@ -407,3 +407,22 @@ def test_runner_reports_next_analysis_time(tmp_path):
     active = json.loads(r.store.get_kv(RUNNER_ACTIVE_KEY))
     assert active["next_ms"] == head + H   # close of the bar forming now
     assert active["analyzing"] == ""
+
+
+def test_dashboard_cancel_endpoint(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from pa_agent.trading.dashboard import create_app
+
+    store = TradeStore(tmp_path / "c.db")
+    pending = store.insert_trade(dict(inst_id="BTC-USDT-SWAP", timeframe="4h", direction="short",
+                                      entry_type="limit", state="pending"))
+    closed = store.insert_trade(dict(inst_id="BTC-USDT-SWAP", timeframe="4h", direction="short",
+                                     entry_type="limit", state="closed"))
+    c = TestClient(create_app(store, demo=True))
+    assert c.post(f"/api/trades/{pending}/cancel").json() == {"requested": True}
+    assert store.cancel_requests() == [pending]
+    assert c.get("/api/overview").json()["active"][0]["cancel_requested"] is True
+    assert c.post(f"/api/trades/{closed}/cancel").status_code == 400
+    assert c.post("/api/trades/999/cancel").status_code == 404

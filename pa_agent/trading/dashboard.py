@@ -73,13 +73,15 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
     @app.get("/api/overview", dependencies=guard)
     def overview(days: int = 0, version: str = "") -> dict[str, Any]:
         hb = int(store.get_kv(HEARTBEAT_KEY, "0") or 0)
+        pending_cancels = set(store.cancel_requests())
         return {
             "demo": demo,
             "heartbeat_ms": hb or None,
             "kill_switch": store.get_kv(KILL_KEY) == "1",
             "equity": store.latest_equity(),
             "summary": summarize(stat_trades(days, version)),
-            "active": store.active_trades(),
+            "active": [{**t, "cancel_requested": t["id"] in pending_cancels}
+                       for t in store.active_trades()],
         }
 
     @app.get("/api/versions", dependencies=guard)
@@ -140,6 +142,17 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
             sig = {**sig, "decision": _loads(sig.pop("decision_json")),
                    "stage1": _loads(sig.pop("stage1_json"))}
         return {"trade": t, "signal": sig, "events": store.events(trade_id=trade_id)}
+
+    @app.post("/api/trades/{trade_id}/cancel", dependencies=guard)
+    def trade_cancel(trade_id: int) -> dict[str, Any]:
+        t = store.get_trade(trade_id)
+        if t is None:
+            raise HTTPException(status_code=404, detail="trade not found")
+        if t["state"] != "pending":
+            raise HTTPException(status_code=400, detail="只能撤销还没成交的挂单")
+        store.request_cancel(trade_id)
+        store.log_event("cancel_request", f"面板请求撤销挂单 #{trade_id}", trade_id=trade_id)
+        return {"requested": True}
 
     @app.get("/api/signals", dependencies=guard)
     def signals(response: Response, limit: int = 200, offset: int = 0, symbol: str = "",

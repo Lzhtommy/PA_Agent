@@ -580,3 +580,43 @@ def test_bad_signal_does_not_block_trade_management(env, monkeypatch):
     ex.tick()
     assert store.get_trade(trade["id"])["state"] == "closed"
     assert store.get_signal(bad)["status"] == "error"
+
+
+def test_dashboard_cancel_request_cancels_pending_entry(env):
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    trade = store.active_trades()[0]
+    store.request_cancel(trade["id"])
+    ex.tick()
+    t = store.get_trade(trade["id"])
+    assert t["state"] == "canceled" and t["close_reason"] == "面板手动撤单"
+    assert broker.orders[t["entry_cl_ord_id"]].state == "canceled"
+    assert store.cancel_requests() == []
+
+
+def test_cancel_request_ignored_once_filled(env):
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    trade = store.active_trades()[0]
+    broker._fill(broker.orders[trade["entry_cl_ord_id"]], 99.0)
+    ex.tick()
+    store.request_cancel(trade["id"])
+    ex.tick()
+    assert store.get_trade(trade["id"])["state"] == "open"
+    assert store.cancel_requests() == []
+
+
+def test_unconfirmed_cancel_request_is_retried(env):
+    store, broker, ex = env
+    _signal(store)
+    ex.tick()
+    trade = store.active_trades()[0]
+    broker.fail_cancel_entry = True
+    store.request_cancel(trade["id"])
+    ex.tick()
+    assert store.get_trade(trade["id"])["state"] == "pending"
+    broker.fail_cancel_entry = False
+    ex.tick()
+    assert store.get_trade(trade["id"])["state"] == "canceled"

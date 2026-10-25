@@ -74,6 +74,8 @@ tbody tr.clickable:hover { background: var(--panel-2); }
 ul.list { margin: 4px 0 12px; padding-left: 18px; }
 .events li { margin: 2px 0; }
 .hint { color: var(--muted); font-size: 12px; }
+button.cancel-btn { padding: 2px 10px; font-size: 12px; border-color: var(--down); color: var(--down); }
+button.cancel-btn:disabled { opacity: .5; cursor: default; }
 label.ctl { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
 label.chk { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; cursor: pointer; }
 .notice { display: none; border: 1px solid var(--warn); color: var(--warn); background: rgba(245,158,11,.08);
@@ -265,15 +267,45 @@ async function loadOverview() {
   table($("activeTbl"), [
     ["#", (r) => r.id], ["品种", (r) => esc(short(r.inst_id))], ["方向", (r) => dirLabel(r.direction)],
     ["状态", (r) => stateLabel[r.state] + (r.state === "pending" ? "·" + entryLabel[r.entry_type] : "")],
+    ["操作", cancelCell],
     ["仓位 (USDT)", posU],
     ["入场", (r) => num(r.avg_entry || r.planned_entry, 1)], ["止损", (r) => num(r.stop_loss, 1)],
     ["止盈", (r) => num(r.tp1, 1) + (r.tp2 ? " / " + num(r.tp2, 1) : "")],
   ], o.active, (r) => openTrade(r.id));
+  bindCancel($("activeTbl"));
 }
 
 // Default to the current version (and follow it when a new one appears) until
 // the viewer picks one themselves in this page session.
 let versionPicked = false;
+// ── 手动撤单：面板只登记请求，由执行器撤单（几秒内生效）──
+function cancelCell(t) {
+  if (t.state !== "pending") return "—";
+  if (t.cancel_requested) return '<span class="muted">撤单中…</span>';
+  return `<button class="cancel-btn" data-cancel="${t.id}">撤单</button>`;
+}
+function bindCancel(root) {
+  root.querySelectorAll("[data-cancel]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    cancelTrade(+b.dataset.cancel, b);
+  });
+}
+async function cancelTrade(id, btn) {
+  if (!window.confirm(`撤销挂单 #${id}？撤单后这笔交易结束，不会再自动重挂。`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = "撤单中…"; }
+  try {
+    const headers = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
+    const r = await fetch(`/api/trades/${id}/cancel`, { method: "POST", headers });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { window.alert("撤单失败：" + (body.detail || r.status)); if (btn) { btn.disabled = false; btn.textContent = "撤单"; } return; }
+  } catch (err) {
+    window.alert("撤单失败：" + err.message);
+    if (btn) { btn.disabled = false; btn.textContent = "撤单"; }
+    return;
+  }
+  refresh();
+}
+
 async function loadVersions() {
   versions = await api("/api/versions");
   const current = versions.find((v) => v.current);
@@ -480,7 +512,8 @@ async function openTrade(id) {
     <div class="kv">
       <div>品种</div><div>${esc(t.inst_id)} · ${esc(t.timeframe)} · ${t.demo ? "模拟盘" : "实盘"}</div>
       <div>方向/方式</div><div>${dirLabel(t.direction)} · ${entryLabel[t.entry_type] || t.entry_type}</div>
-      <div>状态</div><div>${stateLabel[t.state] || t.state} ${esc(t.close_reason)}</div>
+      <div>状态</div><div>${stateLabel[t.state] || t.state} ${esc(t.close_reason)}
+        ${t.state === "pending" ? `<button class="cancel-btn" data-cancel="${t.id}" style="margin-left:8px">撤单</button>` : ""}</div>
       <div>仓位</div><div>${posU(t)} USDT（${num(t.filled_contracts || t.contracts, 2)} 张 × 每张 ${t.ct_val}）</div>
       <div>计划入场</div><div>${num(t.planned_entry, 2)}</div>
       <div>成交均价</div><div>${num(t.avg_entry, 2)} → ${num(t.avg_exit, 2)}</div>
@@ -492,6 +525,7 @@ async function openTrade(id) {
     ${signalSection(signal)}
     <h3>执行记录</h3>
     <ul class="list events">${events.slice().reverse().map((e) => `<li><span class="muted">${ts(e.ts_ms)}</span> ${esc(e.message)}</li>`).join("")}</ul>`;
+  bindCancel($("sheet"));
   $("drawer").classList.add("open");
 }
 

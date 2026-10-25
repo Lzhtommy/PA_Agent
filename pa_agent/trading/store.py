@@ -109,6 +109,9 @@ CREATE TABLE IF NOT EXISTS kv (
 """
 
 ACTIVE_STATES = ("pending", "open")
+# kv prefix for "cancel this resting entry" requests from the dashboard; the
+# executor (the only code that talks to the exchange) carries them out.
+CANCEL_REQUEST_PREFIX = "cancel_request:"
 TERMINAL_STATES = ("closed", "canceled", "rejected", "error")
 
 
@@ -171,6 +174,16 @@ class TradeStore:
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+
+    def request_cancel(self, trade_id: int) -> None:
+        self.set_kv(f"{CANCEL_REQUEST_PREFIX}{int(trade_id)}", str(now_ms()))
+
+    def cancel_requests(self) -> list[int]:
+        rows = self._rows("SELECT key FROM kv WHERE key LIKE ?", (CANCEL_REQUEST_PREFIX + "%",))
+        return sorted(int(r["key"][len(CANCEL_REQUEST_PREFIX):]) for r in rows)
+
+    def clear_cancel_request(self, trade_id: int) -> None:
+        self._exec("DELETE FROM kv WHERE key=?", (f"{CANCEL_REQUEST_PREFIX}{int(trade_id)}",))
 
     # ── signals ───────────────────────────────────────────────────────────────
 
