@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS signals (
     chart_image TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'new',
     status_reason TEXT NOT NULL DEFAULT '',
-    processed_ms INTEGER
+    processed_ms INTEGER,
+    model TEXT NOT NULL DEFAULT '',
+    prompt_hash TEXT NOT NULL DEFAULT '',
+    code_sha TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status, id);
 
@@ -130,6 +133,10 @@ class TradeStore:
             if "ccy" not in cols:
                 # Rows written before equity switched to USDT hold OKX totalEq (USD).
                 self._conn.execute("ALTER TABLE equity ADD COLUMN ccy TEXT NOT NULL DEFAULT 'USD'")
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(signals)")}
+            for col in ("model", "prompt_hash", "code_sha"):
+                if col not in cols:
+                    self._conn.execute(f"ALTER TABLE signals ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
             self._conn.commit()
 
     def close(self) -> None:
@@ -173,14 +180,15 @@ class TradeStore:
             "signal_uid", "created_ms", "source", "symbol", "timeframe", "direction",
             "order_type", "entry", "stop_loss", "tp1", "tp2", "trade_confidence",
             "estimated_win_rate", "reasoning", "decision_json", "stage1_json",
-            "record_path", "chart_image",
+            "record_path", "chart_image", "model", "prompt_hash", "code_sha",
         ]
         values = []
         for c in cols:
             v = signal.get(c)
             if c in ("decision_json", "stage1_json") and not isinstance(v, str):
                 v = json.dumps(v or {}, ensure_ascii=False)
-            if v is None and c in ("source", "direction", "reasoning", "record_path", "chart_image"):
+            if v is None and c in ("source", "direction", "reasoning", "record_path", "chart_image",
+                                   "model", "prompt_hash", "code_sha"):
                 v = ""
             values.append(v)
         if values[1] is None:

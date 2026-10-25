@@ -159,3 +159,38 @@ def test_build_signal_no_order():
                        stage2_full={}, stage1_diagnosis=None, symbol="BTC-USDT-SWAP",
                        timeframe="1h", source="gui", analysis_key="1")
     assert sig["order_type"] == "none" and sig["direction"] == ""
+
+
+def test_emit_signal_tags_strategy_version(tmp_path):
+    from types import SimpleNamespace
+
+    from pa_agent.trading.signals import emit_signal, prompt_hash
+    from pa_agent.trading.store import TradeStore
+
+    settings = SimpleNamespace(trading=SimpleNamespace(enabled=True),
+                               provider=SimpleNamespace(model="claude_cli/sonnet"))
+    db = tmp_path / "q.db"
+    sid = emit_signal(settings, decision_inner={"order_type": "不下单"}, stage2_full={},
+                      stage1_diagnosis=None, symbol="BTC-USDT-SWAP", timeframe="1h",
+                      source="test", analysis_key="1", db_path=db)
+    row = TradeStore(db).get_signal(sid)
+    assert row["model"] == "claude_cli/sonnet"
+    assert row["prompt_hash"] == prompt_hash() and len(row["prompt_hash"]) == 8
+
+
+def test_store_adds_version_columns_to_old_db(tmp_path):
+    import sqlite3
+
+    from pa_agent.trading.store import TradeStore
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE signals (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                 "signal_uid TEXT NOT NULL UNIQUE, created_ms INTEGER NOT NULL, "
+                 "source TEXT NOT NULL DEFAULT '', symbol TEXT NOT NULL, timeframe TEXT NOT NULL, "
+                 "status TEXT NOT NULL DEFAULT 'new')")
+    conn.commit()
+    conn.close()
+    TradeStore(db)
+    cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(signals)")}
+    assert {"model", "prompt_hash", "code_sha"} <= cols

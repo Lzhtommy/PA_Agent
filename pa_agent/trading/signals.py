@@ -5,7 +5,10 @@ cancel a resting entry when the latest analysis no longer supports it.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,39 @@ def direction_from_decision(decision: dict[str, Any]) -> str:
 
     sign = order_direction_sign(str(decision.get("order_direction") or ""))
     return "long" if sign > 0 else "short" if sign < 0 else ""
+
+
+def prompt_hash() -> str:
+    """Short hash of everything that shapes the AI decision: the prompt files plus
+    the ``pa_agent/ai`` and trade-metrics code that assemble, validate and adjust it.
+
+    Signals sharing ``(model, prompt_hash)`` come from the same strategy version, so
+    their results can be pooled; any prompt or decision-logic edit starts a new one.
+    """
+    from pa_agent.config.paths import PROJECT_ROOT, PROMPT_DIR
+
+    pkg = PROJECT_ROOT / "pa_agent"
+    files = [p for p in PROMPT_DIR.rglob("*") if p.suffix in (".txt", ".md")]
+    files += list((pkg / "ai").rglob("*.py"))
+    files.append(pkg / "util" / "trade_metrics.py")
+    h = hashlib.sha256()
+    for path in sorted(p for p in files if p.is_file()):
+        h.update(path.relative_to(PROJECT_ROOT).as_posix().encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()[:8]
+
+
+@functools.cache
+def code_sha() -> str:
+    """Git commit the process started from (for tracing only; "" outside a checkout)."""
+    from pa_agent.config.paths import PROJECT_ROOT
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=PROJECT_ROOT,
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def build_signal(
@@ -112,6 +148,12 @@ def emit_signal(
         record_path=record_path,
         chart_image=chart_image,
     )
+    signal["model"] = str(getattr(getattr(settings, "provider", None), "model", "") or "")
+    try:
+        signal["prompt_hash"] = prompt_hash()
+    except OSError as exc:
+        logger.warning("prompt hash unavailable: %s", exc)
+    signal["code_sha"] = code_sha()
     store = TradeStore(db_path or QUANT_DB_PATH)
     try:
         signal_id = store.insert_signal(signal)
