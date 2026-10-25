@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pa_agent.trading.executor import HEARTBEAT_KEY, KILL_DONE_KEY, KILL_KEY
-from pa_agent.trading.stats import ai_quality, summarize
+from pa_agent.trading.stats import ai_quality, summarize, version_label
 from pa_agent.trading.store import TradeStore, now_ms
 
 logger = logging.getLogger(__name__)
@@ -59,23 +59,41 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
     def index() -> str:
         return (_STATIC_DIR / "dashboard.html").read_text(encoding="utf-8")
 
-    @app.get("/api/overview", dependencies=guard)
-    def overview(days: int = 0) -> dict[str, Any]:
-        since = int((time.time() - days * 86400) * 1000) if days else 0
-        trades = store.list_trades(limit=100_000)
+    def since_ms(days: int) -> int:
+        return int((time.time() - days * 86400) * 1000) if days else 0
+
+    def stat_trades(days: int, version: str) -> list[dict[str, Any]]:
+        """Trades for the statistics cards (period by close time, optional version)."""
+        trades = store.list_trades(limit=100_000, version=version or None)
+        since = since_ms(days)
         if since:
             trades = [t for t in trades if (t.get("closed_ms") or t.get("created_ms") or 0) >= since]
-        equity = store.equity_series(since_ms=since, demo=demo)
+        return trades
+
+    @app.get("/api/overview", dependencies=guard)
+    def overview(days: int = 0, version: str = "") -> dict[str, Any]:
         hb = int(store.get_kv(HEARTBEAT_KEY, "0") or 0)
-        latest = store.latest_equity()
         return {
             "demo": demo,
             "heartbeat_ms": hb or None,
             "kill_switch": store.get_kv(KILL_KEY) == "1",
-            "equity": latest,
-            "summary": summarize(trades, equity),
+            "equity": store.latest_equity(),
+            "summary": summarize(stat_trades(days, version)),
             "active": store.active_trades(),
         }
+
+    @app.get("/api/versions", dependencies=guard)
+    def versions() -> list[dict[str, Any]]:
+        from pa_agent.trading.signals import prompt_hash
+
+        try:
+            current = prompt_hash()
+        except OSError:
+            current = ""
+        return [{**v, "key": f"{v['model']}|{v['prompt_hash']}",
+                 "label": version_label(v["model"], v["prompt_hash"]),
+                 "current": bool(current) and v["prompt_hash"] == current}
+                for v in store.versions()]
 
     @app.get("/api/equity", dependencies=guard)
     def equity(days: int = 0) -> list[dict[str, Any]]:
@@ -87,11 +105,17 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
 
     @app.get("/api/trades", dependencies=guard)
     def trades(response: Response, limit: int = 200, offset: int = 0, state: str = "",
-               inst_id: str = "") -> list[dict[str, Any]]:
+               inst_id: str = "", version: str = "", days: int = 0) -> list[dict[str, Any]]:
         states = tuple(s for s in state.split(",") if s) or None
-        response.headers["X-Total-Count"] = str(store.count_trades(states=states, inst_id=inst_id or None))
-        rows = store.list_trades(states=states, limit=min(limit, 2000), offset=max(0, offset),
-                                 inst_id=inst_id or None)
+        if days:  # statistics view (cumulative chart): whole period, no paging
+            rows = [t for t in stat_trades(days, version)
+                    if not states or t["state"] in states][:min(limit, 2000)]
+            response.headers["X-Total-Count"] = str(len(rows))
+        else:
+            response.headers["X-Total-Count"] = str(store.count_trades(
+                states=states, inst_id=inst_id or None, version=version or None))
+            rows = store.list_trades(states=states, limit=min(limit, 2000), offset=max(0, offset),
+                                     inst_id=inst_id or None, version=version or None)
         sig_ids = {r["signal_id"] for r in rows if r.get("signal_id")}
         conf: dict[int, dict[str, Any]] = {}
         for sid in sig_ids:
@@ -99,7 +123,8 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
             if s:
                 conf[sid] = {"trade_confidence": s["trade_confidence"],
                              "estimated_win_rate": s["estimated_win_rate"],
-                             "timeframe": s["timeframe"]}
+                             "timeframe": s["timeframe"],
+                             "version": version_label(s["model"], s["prompt_hash"])}
         return [{**r, **conf.get(r.get("signal_id") or -1, {})} for r in rows]
 
     @app.get("/api/trades/{trade_id}", dependencies=guard)
@@ -114,10 +139,12 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
         return {"trade": t, "signal": sig, "events": store.events(trade_id=trade_id)}
 
     @app.get("/api/signals", dependencies=guard)
-    def signals(response: Response, limit: int = 200, offset: int = 0,
-                symbol: str = "") -> list[dict[str, Any]]:
-        response.headers["X-Total-Count"] = str(store.count_signals(symbol or None))
-        return store.list_signals(limit=min(limit, 2000), offset=max(0, offset), symbol=symbol or None)
+    def signals(response: Response, limit: int = 200, offset: int = 0, symbol: str = "",
+                actionable: bool = False, version: str = "") -> list[dict[str, Any]]:
+        response.headers["X-Total-Count"] = str(
+            store.count_signals(symbol or None, actionable, version or None))
+        return store.list_signals(limit=min(limit, 2000), offset=max(0, offset), symbol=symbol or None,
+                                  actionable=actionable, version=version or None)
 
     @app.get("/api/signals/{signal_id}", dependencies=guard)
     def signal_detail(signal_id: int) -> dict[str, Any]:
@@ -128,10 +155,13 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
                 "stage1": _loads(sig.pop("stage1_json"))}
 
     @app.get("/api/ai-quality", dependencies=guard)
-    def quality() -> dict[str, Any]:
-        trades = store.list_trades(limit=100_000)
+    def quality(days: int = 0, version: str = "") -> dict[str, Any]:
         sigs = {r["id"]: r for r in store._rows("SELECT * FROM signals")}
-        return ai_quality(trades, sigs, list(sigs.values()))
+        model, _, phash = version.partition("|")
+        since = since_ms(days)
+        in_scope = [s for s in sigs.values() if s["created_ms"] >= since
+                    and (not version or (s["model"], s["prompt_hash"]) == (model, phash))]
+        return ai_quality(stat_trades(days, version), sigs, in_scope)
 
     @app.get("/api/events", dependencies=guard)
     def events(response: Response, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:

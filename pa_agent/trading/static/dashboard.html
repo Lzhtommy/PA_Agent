@@ -74,6 +74,11 @@ tbody tr.clickable:hover { background: var(--panel-2); }
 ul.list { margin: 4px 0 12px; padding-left: 18px; }
 .events li { margin: 2px 0; }
 .hint { color: var(--muted); font-size: 12px; }
+label.ctl { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+label.chk { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; cursor: pointer; }
+.notice { display: none; border: 1px solid var(--warn); color: var(--warn); background: rgba(245,158,11,.08);
+  border-radius: 10px; padding: 8px 12px; margin: -4px 0 16px; font-size: 13px; }
+.notice.show { display: block; }
 </style>
 </head>
 <body>
@@ -82,28 +87,22 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
   <div class="badges">
     <span id="mode" class="badge">—</span>
     <span id="hb" class="badge">执行器 —</span>
-    <select id="range">
+    <label class="ctl">策略版本 <select id="version"><option value="">全部版本</option></select></label>
+    <label class="ctl">统计区间 <select id="range">
       <option value="0">全部</option><option value="1">近 1 天</option>
       <option value="7">近 7 天</option><option value="30">近 30 天</option>
-    </select>
+    </select></label>
     <button id="killBtn" class="danger">紧急停止</button>
   </div>
 </header>
 <main>
   <section class="kpis" id="kpis"></section>
 
-  <div class="card">
-    <h2>分析设置 <span class="hint">后台 AI 分析、交易的品种和K线周期，保存后下一轮生效，无需重启</span></h2>
-    <div class="runner-form">
-      <input type="text" id="runSymbols" placeholder="品种，逗号分隔，如 BTC-USDT-SWAP, ETH-USDT-SWAP（也可只写 BTC）">
-      <select id="runTf"></select>
-      <button id="runSave" class="primary">保存</button>
-    </div>
-    <p class="hint" id="runStatus" style="margin:8px 0 0"></p>
-  </div>
+  <div class="notice" id="notice"></div>
 
   <div class="card">
     <h2>K线 <span class="kline-ctl"><span class="hint" id="klineInfo"></span>
+      <label class="chk"><input type="checkbox" id="klineCanceled">显示已撤销挂单</label>
       <select id="klineInst"></select>
       <select id="klineTf">
         <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="2h">2h</option><option value="4h">4h</option><option value="1d">1d</option><option value="1w">1w</option>
@@ -113,7 +112,7 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
 
   <div class="grid2">
     <div class="card">
-      <h2>账户权益曲线 (USDT)</h2>
+      <h2>账户权益曲线 (USDT) <span class="hint">账户整体，含持仓浮动盈亏</span></h2>
       <div class="chart-box"><canvas id="eqChart"></canvas></div>
     </div>
     <div class="card">
@@ -123,12 +122,17 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
   </div>
 
   <div class="card">
-    <h2>累计净盈亏 (USDT，按平仓顺序)</h2>
+    <h2>累计 R <span class="hint">每个点是一笔平仓交易，按平仓顺序；1R = 该笔计划风险</span></h2>
     <div class="chart-box"><canvas id="pnlChart"></canvas></div>
   </div>
 
   <div class="card">
     <h2>交易明细 <span class="kline-ctl"><span class="hint">点击一行查看 AI 当时的分析</span>
+      <select id="tradeState">
+        <option value="pending,open,closed">已成交 + 挂单中</option>
+        <option value="">全部（含已撤销）</option>
+        <option value="canceled,rejected,error">已撤销 / 拒绝</option>
+      </select>
       <select class="instFilter"></select></span></h2>
     <div class="table-wrap"><table id="tradesTbl"></table></div>
     <div class="pager" id="tradesPager"></div>
@@ -143,6 +147,7 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
 
   <div class="card">
     <h2>信号记录 <span class="kline-ctl"><span class="hint">每次分析的结论，以及执行器怎么处理的</span>
+      <label class="chk"><input type="checkbox" id="sigOrdersOnly" checked>只看下单信号</label>
       <select class="instFilter"></select></span></h2>
     <div class="table-wrap"><table id="sigTbl"></table></div>
     <div class="pager" id="sigPager"></div>
@@ -152,6 +157,16 @@ ul.list { margin: 4px 0 12px; padding-left: 18px; }
     <h2>系统事件</h2>
     <div class="table-wrap"><table id="evTbl"></table></div>
     <div class="pager" id="evPager"></div>
+  </div>
+
+  <div class="card">
+    <h2>分析设置 <span class="hint">后台 AI 分析、交易的品种和K线周期，保存后下一轮生效，无需重启</span></h2>
+    <div class="runner-form">
+      <input type="text" id="runSymbols" placeholder="品种，逗号分隔，如 BTC-USDT-SWAP, ETH-USDT-SWAP（也可只写 BTC）">
+      <select id="runTf"></select>
+      <button id="runSave" class="primary">保存</button>
+    </div>
+    <p class="hint" id="runStatus" style="margin:8px 0 0"></p>
   </div>
 </main>
 
@@ -174,12 +189,23 @@ const ts = (ms) => ms ? new Date(ms).toLocaleString("zh-CN", { hour12: false, mo
 const dirLabel = (d) => d === "long" ? '<span class="up">做多</span>' : d === "short" ? '<span class="down">做空</span>' : "—";
 const entryLabel = { limit: "限价", stop: "突破", market: "市价", none: "不下单" };
 const stateLabel = { pending: "挂单中", open: "持仓中", closed: "已平仓", canceled: "已撤销", rejected: "已拒绝", error: "错误" };
-const sigStatus = { new: "待处理", processed: "已执行", rejected: "风控拒绝", skipped: "跳过", error: "错误" };
+const sigStatus = { new: "待处理", processed: "已下单", rejected: "风控拒绝", skipped: "跳过", error: "错误" };
+const sigHandled = (r) => r.order_type === "none" ? '<span class="muted">无操作</span>' : (sigStatus[r.status] || r.status);
+const short = (inst) => String(inst || "").replace("-SWAP", "");
+const MIN_SAMPLE = 30;
+const store = {  // per-viewer UI prefs; storage may be unavailable
+  get(k, d) { try { const v = localStorage.getItem("pa." + k); return v == null ? d : v; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("pa." + k, v); } catch {} },
+};
+// query string for the statistics filters (version + period)
+const statQs = () => `days=${$("range").value}&version=${encodeURIComponent($("version").value)}`;
+const rFmt = (v) => v == null ? "—" : signed(v, 2) + "R";
 const usdt = (contracts, ctVal, price) => contracts && ctVal && price ? num(contracts * ctVal * price, 0) : "—";
 const posU = (r) => usdt(r.filled_contracts || r.contracts, r.ct_val, r.avg_entry || r.planned_entry);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-let eqChart, pnlChart, qData, qKey = "by_confidence";
+let pts = [];
+let eqChart, pnlChart, qData, qKey = "by_version", versions = [];
 
 function kpi(label, value, sub = "") {
   return `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
@@ -205,8 +231,7 @@ function lineChart(existing, canvas, labels, data, color) {
 }
 
 async function loadOverview() {
-  const days = $("range").value;
-  const o = await api(`/api/overview?days=${days}`);
+  const o = await api(`/api/overview?${statQs()}`);
   const s = o.summary;
   $("mode").className = "badge " + (o.demo ? "demo" : "live");
   $("mode").textContent = o.demo ? "模拟盘" : "实盘";
@@ -217,22 +242,41 @@ async function loadOverview() {
   $("killBtn").className = o.kill_switch ? "" : "danger";
   $("killBtn").dataset.on = o.kill_switch ? "1" : "0";
   const eq = o.equity;
+  const ver = $("version").value;
   $("kpis").innerHTML = [
-    kpi("账户权益 (USDT)", eq ? num(eq.total_eq) : "—", eq ? `可用 ${num(eq.avail_eq)} · 浮动盈亏 ${num(eq.upl)}` : ""),
-    kpi("净盈亏 (USDT)", signed(s.net_pnl), s.return_pct != null ? `收益率 ${pct(s.return_pct, 2)}` : ""),
+    kpi("账户权益 (USDT)", eq ? num(eq.total_eq) : "—", eq ? `账户整体 · 可用 ${num(eq.avail_eq)} · 浮动 ${num(eq.upl)}` : ""),
+    kpi("净盈亏 (USDT)", signed(s.net_pnl), s.return_pct != null ? `收益率 ${pct(s.return_pct, 2)}（相对首笔开仓前权益）` : ""),
     kpi("胜率", pct(s.win_rate), `${s.wins} 盈 / ${s.losses} 亏，共 ${s.trades} 笔`),
-    kpi("盈亏比", num(s.payoff_ratio), `利润因子 ${num(s.profit_factor)}`),
-    kpi("平均 R", num(s.avg_r), `每笔期望 ${num(s.expectancy)} USDT`),
-    kpi("最大回撤 (USDT)", num(s.max_drawdown), s.max_drawdown_pct ? pct(s.max_drawdown_pct, 2) : ""),
+    kpi("平均 R", s.avg_r == null ? "—" : signed(s.avg_r), `合计 ${rFmt(s.total_r)} · 每笔 ${num(s.expectancy)} USDT`),
+    kpi("平均盈 / 平均亏", num(s.payoff_ratio), `利润因子 ${num(s.profit_factor)}`),
+    kpi("最大回撤（已实现）", num(s.max_drawdown), `${s.max_drawdown_pct != null ? pct(s.max_drawdown_pct, 2) + " · " : ""}${num(s.max_drawdown_r)}R`),
     kpi("手续费 (USDT)", num(s.fees), `资金费 ${num(s.funding)}（均已计入净盈亏）`),
   ].join("");
+  const notes = [];
+  if (s.trades < MIN_SAMPLE)
+    notes.push(`样本不足：当前只有 ${s.trades} 笔已平仓交易，少于 ${MIN_SAMPLE} 笔时胜率、平均 R 波动很大，仅供参考。`);
+  const mixed = versions.filter((v) => v.closed > 0).length;
+  if (!ver && mixed > 1)
+    notes.push(`统计混合了 ${mixed} 个策略版本，评估策略请在右上角选择单一版本。`);
+  $("notice").innerHTML = notes.map(esc).join("<br>");
+  $("notice").classList.toggle("show", notes.length > 0);
   table($("activeTbl"), [
-    ["#", (r) => r.id], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))], ["方向", (r) => dirLabel(r.direction)],
+    ["#", (r) => r.id], ["品种", (r) => esc(short(r.inst_id))], ["方向", (r) => dirLabel(r.direction)],
     ["状态", (r) => stateLabel[r.state] + (r.state === "pending" ? "·" + entryLabel[r.entry_type] : "")],
     ["仓位 (USDT)", posU],
     ["入场", (r) => num(r.avg_entry || r.planned_entry, 1)], ["止损", (r) => num(r.stop_loss, 1)],
     ["止盈", (r) => num(r.tp1, 1) + (r.tp2 ? " / " + num(r.tp2, 1) : "")],
   ], o.active, (r) => openTrade(r.id));
+}
+
+async function loadVersions() {
+  versions = await api("/api/versions");
+  const sel = $("version"), want = sel.value || store.get("version", "");
+  const opts = [["", "全部版本"], ...versions.map((v) =>
+    [v.key, `${v.label}${v.current ? "（当前）" : ""} · ${v.closed} 笔`])];
+  const html = opts.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join("");
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  sel.value = opts.some(([k]) => k === want) ? want : "";
 }
 
 async function loadEquity() {
@@ -308,48 +352,81 @@ document.querySelectorAll(".instFilter").forEach((sel) => sel.onchange = () => {
 });
 
 async function loadPnlChart() {
-  const closed = (await api("/api/trades?state=closed&limit=2000"))
-    .filter((r) => r.net_pnl != null).sort((a, b) => a.closed_ms - b.closed_ms);
+  const closed = (await api(`/api/trades?state=closed&limit=2000&${statQs()}`))
+    .filter((r) => r.net_pnl != null && r.risk_amount).sort((a, b) => a.closed_ms - b.closed_ms);
   let acc = 0;
-  pnlChart = lineChart(pnlChart, $("pnlChart"), closed.map((r) => "#" + r.id), closed.map((r) => (acc += r.net_pnl)), css("--up"));
+  pts = closed.map((r) => { const R = r.net_pnl / r.risk_amount; acc += R; return { r, R, acc }; });
+  const data = { labels: pts.map((p) => "#" + p.r.id), datasets: [{
+    data: pts.map((p) => p.acc), borderColor: css("--accent"), backgroundColor: css("--accent") + "22", fill: true,
+    tension: 0, borderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
+    pointBackgroundColor: pts.map((p) => p.R > 0 ? css("--up") : css("--down")), pointBorderWidth: 0 }] };
+  if (pnlChart) { pnlChart.data = data; pnlChart.update(); return; }
+  pnlChart = new Chart($("pnlChart"), { type: "line", data, options: {
+    maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: {
+      label: (c) => { const p = pts[c.dataIndex]; return [`本笔 ${p.R > 0 ? "+" : ""}${p.R.toFixed(2)}R（${num(p.r.net_pnl)} USDT）`, `累计 ${p.acc.toFixed(2)}R`]; },
+    } } },
+    scales: { x: { ticks: { color: css("--muted"), maxTicksLimit: 12 }, grid: { color: css("--line") } },
+              y: { ticks: { color: css("--muted"), callback: (v) => v + "R" }, grid: { color: css("--line") } } } } });
 }
 
 async function loadTrades() {
   const p = pager("trades", $("tradesPager"), loadTrades);
-  const rows = await fetchPage(p, `/api/trades${instFilter ? "?inst_id=" + encodeURIComponent(instFilter) : ""}`);
+  const q = new URLSearchParams();
+  if (instFilter) q.set("inst_id", instFilter);
+  if ($("tradeState").value) q.set("state", $("tradeState").value);
+  if ($("version").value) q.set("version", $("version").value);
+  const rows = await fetchPage(p, `/api/trades${q.toString() ? "?" + q : ""}`);
   renderPager(p);
+  const filled = (r) => r.state === "open" || r.state === "closed";
   table($("tradesTbl"), [
-    ["#", (r) => r.id], ["开仓时间", (r) => ts(r.opened_ms || r.created_ms)], ["品种", (r) => esc(r.inst_id.replace("-SWAP", ""))],
-    ["周期", (r) => esc(r.timeframe)], ["方向", (r) => dirLabel(r.direction)], ["入场方式", (r) => entryLabel[r.entry_type] || r.entry_type],
-    ["状态", (r) => stateLabel[r.state] || r.state], ["仓位 (USDT)", posU],
-    ["入场价", (r) => num(r.avg_entry || r.planned_entry, 1)], ["出场价", (r) => num(r.avg_exit, 1)],
-    ["净盈亏 (USDT)", (r) => signed(r.net_pnl)], ["R", (r) => r.net_pnl != null && r.risk_amount ? signed(r.net_pnl / r.risk_amount) : "—"],
-    ["AI把握度", (r) => r.trade_confidence ?? "—"], ["离场原因", (r) => esc(r.close_reason)],
+    ["#", (r) => r.id],
+    ["时间", (r) => r.opened_ms ? ts(r.opened_ms) + " 成交" : `<span class="muted">${ts(r.created_ms)} 下单</span>`],
+    ["品种", (r) => esc(short(r.inst_id))],
+    ["方向 · 方式", (r) => `${dirLabel(r.direction)} · ${entryLabel[r.entry_type] || r.entry_type}`],
+    ["状态", (r) => stateLabel[r.state] || r.state],
+    ["仓位 (USDT)", (r) => filled(r) ? posU(r) : `<span class="muted">计划 ${posU(r)}</span>`],
+    ["入场", (r) => num(r.avg_entry || r.planned_entry, 1)],
+    ["止损", (r) => num(r.stop_loss, 1)],
+    ["止盈 1 / 2", (r) => num(r.tp1, 1) + (r.tp2 ? " / " + num(r.tp2, 1) : "")],
+    ["出场", (r) => num(r.avg_exit, 1)],
+    ["计划风险 (USDT)", (r) => num(r.risk_amount, 0)],
+    ["净盈亏 (USDT)", (r) => signed(r.net_pnl)],
+    ["R", (r) => r.net_pnl != null && r.risk_amount ? rFmt(r.net_pnl / r.risk_amount) : "—"],
+    ["AI把握度", (r) => r.trade_confidence ?? "—"],
+    ["离场 / 撤单原因", (r) => esc(r.close_reason)],
   ], rows, (r) => openTrade(r.id));
 }
 
-const qTabsDef = [["by_confidence", "按交易把握度"], ["by_estimated_win_rate", "按 AI 估计胜率"], ["by_entry_type", "按入场方式"],
+const qTabsDef = [["by_version", "按策略版本"], ["by_confidence", "按交易把握度"], ["by_estimated_win_rate", "按 AI 估计胜率"], ["by_entry_type", "按入场方式"],
   ["by_direction", "按方向"], ["by_cycle", "按市场周期"], ["by_exit_reason", "按离场原因"]];
 function renderQuality() {
   $("qTabs").innerHTML = qTabsDef.map(([k, l]) => `<button data-k="${k}" class="${k === qKey ? "active" : ""}">${l}</button>`).join("");
   $("qTabs").querySelectorAll("button").forEach((b) => b.onclick = () => { qKey = b.dataset.k; renderQuality(); });
-  table($("qTbl"), [["分组", (g) => esc(g.group)], ["笔数", (g) => g.trades], ["实际胜率", (g) => pct(g.win_rate)],
-    ["净盈亏", (g) => signed(g.net_pnl)], ["平均 R", (g) => num(g.avg_r)]], qData[qKey] || []);
+  table($("qTbl"), [["分组", (g) => esc(g.group)],
+    ["笔数", (g) => g.trades < MIN_SAMPLE ? `${g.trades} <span class="hint">样本少</span>` : g.trades],
+    ["实际胜率", (g) => pct(g.win_rate)], ["平均 R", (g) => rFmt(g.avg_r)], ["合计 R", (g) => rFmt(g.total_r)],
+    ["净盈亏 (USDT)", (g) => signed(g.net_pnl)]], qData[qKey] || []);
   const f = qData.signal_funnel || {};
-  $("funnel").textContent = `信号共 ${qData.signals_total} 条，其中下单信号 ${qData.signals_actionable} 条；` +
-    Object.entries(f).map(([k, v]) => `${sigStatus[k] || k} ${v}`).join("，");
+  $("funnel").textContent = `统计区间内共分析 ${qData.signals_total} 次，其中下单信号 ${qData.signals_actionable} 条` +
+    (Object.keys(f).length ? "：" + Object.entries(f).map(([k, v]) => `${sigStatus[k] || k} ${v}`).join("，") : "") +
+    "。只统计已平仓交易。";
 }
-async function loadQuality() { qData = await api("/api/ai-quality"); renderQuality(); }
+async function loadQuality() { qData = await api(`/api/ai-quality?${statQs()}`); renderQuality(); }
 
 async function loadSignals() {
   const p = pager("sig", $("sigPager"), loadSignals);
-  const rows = await fetchPage(p, `/api/signals${instFilter ? "?symbol=" + encodeURIComponent(instFilter) : ""}`);
+  const q = new URLSearchParams();
+  if (instFilter) q.set("symbol", instFilter);
+  if ($("sigOrdersOnly").checked) q.set("actionable", "true");
+  if ($("version").value) q.set("version", $("version").value);
+  const rows = await fetchPage(p, `/api/signals${q.toString() ? "?" + q : ""}`);
   renderPager(p);
   table($("sigTbl"), [
-    ["#", (r) => r.id], ["时间", (r) => ts(r.created_ms)], ["来源", (r) => esc(r.source)], ["品种", (r) => esc(r.symbol)],
+    ["#", (r) => r.id], ["时间", (r) => ts(r.created_ms)], ["品种", (r) => esc(short(r.symbol))],
     ["周期", (r) => esc(r.timeframe)], ["结论", (r) => r.order_type === "none" ? '<span class="muted">不下单</span>' : dirLabel(r.direction) + " " + entryLabel[r.order_type]],
-    ["入场/止损/止盈", (r) => r.order_type === "none" ? "—" : `${num(r.entry, 1)} / ${num(r.stop_loss, 1)} / ${num(r.tp1, 1)}`],
-    ["把握度", (r) => r.trade_confidence ?? "—"], ["处理", (r) => sigStatus[r.status] || r.status], ["说明", (r) => esc(r.status_reason)],
+    ["入场 / 止损 / 止盈", (r) => r.order_type === "none" ? "—" : `${num(r.entry, 1)} / ${num(r.stop_loss, 1)} / ${num(r.tp1, 1)}`],
+    ["把握度", (r) => r.trade_confidence ?? "—"], ["处理", sigHandled],
+    ["说明", (r) => r.order_type === "none" && r.status_reason === "不下单" ? "—" : esc(r.status_reason)],
   ], rows, (r) => openSignal(r.id));
 }
 
@@ -380,7 +457,8 @@ function signalSection(sig) {
       <div>诊断把握度</div><div>${esc(d.diagnosis_confidence ?? "—")}</div>
       <div>交易把握度</div><div>${esc(d.trade_confidence ?? "—")}</div>
       <div>估计胜率</div><div>${esc(d.estimated_win_rate ?? "—")}</div>
-      <div>执行器处理</div><div>${esc(sigStatus[sig.status] || sig.status)} ${esc(sig.status_reason)}</div>
+      <div>策略版本</div><div>${esc(sig.model || "未标记")} · ${esc(sig.prompt_hash || "—")}</div>
+      <div>执行器处理</div><div>${sigHandled(sig)} ${esc(sig.status_reason)}</div>
     </div>
     <div class="muted">理由</div><div class="reason">${esc(d.reasoning || sig.reasoning || "—")}</div>
     ${d.key_factors ? `<div class="muted">关键因素</div>${list(d.key_factors)}` : ""}
@@ -427,7 +505,19 @@ $("killBtn").onclick = async () => {
   await api(on ? "/api/resume" : "/api/kill", { method: "POST" });
   refresh();
 };
-$("range").onchange = () => { loadOverview(); loadEquity(); };
+$("range").value = store.get("range", "0");
+$("range").onchange = () => { store.set("range", $("range").value); refreshStats(); };
+$("version").onchange = () => {
+  store.set("version", $("version").value);
+  resetPager("trades"); resetPager("sig");
+  refreshStats(); loadTrades().catch(() => {}); loadSignals().catch(() => {});
+};
+$("tradeState").onchange = () => { resetPager("trades"); loadTrades().catch(() => {}); };
+$("sigOrdersOnly").onchange = () => { resetPager("sig"); loadSignals().catch(() => {}); };
+function refreshStats() {
+  loadOverview().catch(() => {}); loadEquity().catch(() => {});
+  loadPnlChart().catch(() => {}); loadQuality().catch(() => {});
+}
 
 // ── 分析设置 ──
 let runnerCfg = null, runDirty = false;
@@ -521,20 +611,22 @@ async function loadKline() {
   if (kKey !== inst + tf) { kChart.timeScale().fitContent(); kKey = inst + tf; }
 
   const markers = [];
+  const showCanceled = $("klineCanceled").checked;
   for (const t of d.trades) {
     const long = t.direction === "long";
     const tIn = barTime(bars, t.opened_ms);
     if (tIn != null) markers.push({ time: tIn, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown",
-      color: long ? css("--up") : css("--down"), text: `#${t.id} ${long ? "多" : "空"} ${num(t.avg_entry, 1)}` });
-    else if (!t.opened_ms) {
+      color: long ? css("--up") : css("--down"), text: `#${t.id}${long ? "多" : "空"}` });
+    else if (!t.opened_ms && (t.state === "pending" || showCanceled)) {
       const tPlaced = barTime(bars, t.created_ms);
       if (tPlaced != null) markers.push({ time: tPlaced, position: long ? "belowBar" : "aboveBar", shape: "circle",
-        color: css("--muted"), text: `#${t.id} ${stateLabel[t.state] || t.state}` });
+        color: css("--muted"), text: `#${t.id}${t.state === "pending" ? "挂单" : "撤"}` });
     }
     const tOut = t.state === "closed" ? barTime(bars, t.closed_ms) : null;
+    const R = t.net_pnl != null && t.risk_amount ? t.net_pnl / t.risk_amount : null;
     if (tOut != null) markers.push({ time: tOut, position: long ? "aboveBar" : "belowBar", shape: "square",
       color: (t.net_pnl ?? 0) >= 0 ? css("--up") : css("--down"),
-      text: `#${t.id} 平 ${t.net_pnl != null ? (t.net_pnl > 0 ? "+" : "") + num(t.net_pnl) + "U" : ""}` });
+      text: R != null ? `#${t.id} ${R > 0 ? "+" : ""}${R.toFixed(1)}R` : `#${t.id}平` });
   }
   markers.sort((a, b) => a.time - b.time);
   kSeries.setMarkers(markers);
@@ -543,12 +635,13 @@ async function loadKline() {
   kLines = [];
   const active = d.trades.filter((t) => t.state === "pending" || t.state === "open");
   for (const t of active) {
+    const tag = active.length > 1 ? `#${t.id} ` : "";
     const add = (price, color, title, style = 2) => price && kLines.push(kSeries.createPriceLine(
-      { price, color, title, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
-    add(t.avg_entry || t.planned_entry, css("--accent"), `#${t.id} ${t.state === "open" ? "持仓" : "挂单"}`, 0);
-    add(t.stop_loss, css("--down"), `#${t.id} 止损`);
-    add(t.tp1, css("--up"), `#${t.id} 止盈1`);
-    add(t.tp2, css("--up"), `#${t.id} 止盈2`);
+      { price, color, title: tag + title, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
+    add(t.avg_entry || t.planned_entry, css("--accent"), t.state === "open" ? "持仓" : "挂单", 0);
+    add(t.stop_loss, css("--down"), "止损");
+    add(t.tp1, css("--up"), "TP1");
+    add(t.tp2, css("--up"), "TP2");
   }
   const last = bars[bars.length - 1];
   $("klineInfo").textContent = last ? `OKX 实盘行情 · 最新 ${num(last.c, 1)} · ${active.length} 笔活跃交易` : "";
@@ -556,10 +649,11 @@ async function loadKline() {
 
 $("klineInst").onchange = () => loadKline().catch(() => {});
 $("klineTf").onchange = () => loadKline().catch(() => {});
+$("klineCanceled").onchange = () => loadKline().catch(() => {});
 
 async function refresh() {
   try {
-    await loadInstFilter();
+    await Promise.all([loadInstFilter(), loadVersions()]);
     const [sigs] = await Promise.all([api("/api/signals?limit=50"), loadOverview(), loadEquity(), loadTrades(),
       loadPnlChart(), loadQuality(), loadSignals(), loadEvents(), loadRunner()]);
     const runCfg = runnerCfg && (runnerCfg.config || runnerCfg.active);

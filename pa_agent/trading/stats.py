@@ -30,7 +30,10 @@ def max_drawdown(values: list[float]) -> tuple[float, float]:
     return mdd, mdd_pct
 
 
-def summarize(trades: list[dict[str, Any]], equity: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def summarize(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Stats over closed trades. Drawdown is on realised PnL (not account equity,
+    whose floating PnL spikes would overstate it), so it also works per strategy
+    version; ``return_pct`` is net PnL over the equity before the first trade."""
     closed = [t for t in trades if t.get("state") == "closed" and t.get("net_pnl") is not None]
     closed.sort(key=lambda t: t.get("closed_ms") or 0)
     pnls = [float(t["net_pnl"]) for t in closed]
@@ -40,18 +43,20 @@ def summarize(trades: list[dict[str, Any]], equity: list[dict[str, Any]] | None 
     gross_loss = -sum(losses)
     rs = [r for r in (_r_multiple(t) for t in closed) if r is not None]
 
+    start_eq = next((float(t["equity_at_entry"]) for t in closed if t.get("equity_at_entry")), None)
     cumulative, running = [], 0.0
     for p in pnls:
         running += p
         cumulative.append(running)
-    if equity:
-        mdd, mdd_pct = max_drawdown([float(e["total_eq"]) for e in equity])
-    else:
-        mdd, mdd_pct = max_drawdown([0.0, *cumulative])
-        mdd_pct = 0.0
-
-    start_eq = float(equity[0]["total_eq"]) if equity else None
-    end_eq = float(equity[-1]["total_eq"]) if equity else None
+    base = start_eq or 0.0
+    mdd, mdd_pct = max_drawdown([base, *(base + c for c in cumulative)])
+    if not start_eq:
+        mdd_pct = None
+    cum_r, running_r = [], 0.0
+    for r in rs:
+        running_r += r
+        cum_r.append(running_r)
+    mdd_r, _ = max_drawdown([0.0, *cum_r])
     return {
         "trades": len(closed),
         "wins": len(wins),
@@ -67,11 +72,12 @@ def summarize(trades: list[dict[str, Any]], equity: list[dict[str, Any]] | None 
         "profit_factor": gross_win / gross_loss if gross_loss > 0 else None,
         "expectancy": sum(pnls) / len(pnls) if pnls else None,
         "avg_r": sum(rs) / len(rs) if rs else None,
+        "total_r": sum(rs) if rs else None,
         "max_drawdown": mdd,
         "max_drawdown_pct": mdd_pct,
+        "max_drawdown_r": mdd_r,
         "start_equity": start_eq,
-        "end_equity": end_eq,
-        "return_pct": (end_eq - start_eq) / start_eq * 100 if start_eq and end_eq else None,
+        "return_pct": sum(pnls) / start_eq * 100 if start_eq and closed else None,
         "best": max(pnls) if pnls else None,
         "worst": min(pnls) if pnls else None,
     }
@@ -91,6 +97,7 @@ def _group_stats(rows: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]
             "win_rate": sum(1 for p in pnls if p > 0) / len(ts) * 100,
             "net_pnl": sum(pnls),
             "avg_r": sum(rs) / len(rs) if rs else None,
+            "total_r": sum(rs) if rs else None,
         })
     return out
 
@@ -134,9 +141,11 @@ def ai_quality(trades: list[dict[str, Any]], signals_by_id: dict[int, dict[str, 
 
     by_cycle = by(cycle)
     by_exit = _group_stats([(t.get("close_reason") or "未知", t) for t in closed])
-    funnel = Counter((s.get("status") or "?") for s in (signal_status or []))
-    actionable = sum(1 for s in (signal_status or []) if s.get("order_type") not in (None, "none"))
+    by_version = by(lambda t, s: version_label(s.get("model"), s.get("prompt_hash")))
+    orders = [s for s in (signal_status or []) if s.get("order_type") not in (None, "none")]
+    funnel = Counter((s.get("status") or "?") for s in orders)
     return {
+        "by_version": by_version,
         "by_confidence": by_conf,
         "by_estimated_win_rate": by_est,
         "by_entry_type": by_entry,
@@ -145,5 +154,14 @@ def ai_quality(trades: list[dict[str, Any]], signals_by_id: dict[int, dict[str, 
         "by_exit_reason": by_exit,
         "signal_funnel": dict(funnel),
         "signals_total": len(signal_status or []),
-        "signals_actionable": actionable,
+        "signals_actionable": len(orders),
     }
+
+
+def version_label(model: str | None, prompt_hash: str | None) -> str:
+    """Human label for a strategy version (model + prompt hash)."""
+    if not model:
+        return "未标记"
+    if prompt_hash in (None, "", "legacy"):
+        return f"{model} · 旧版本"
+    return f"{model} · {prompt_hash}"

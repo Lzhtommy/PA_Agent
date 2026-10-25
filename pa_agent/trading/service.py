@@ -202,25 +202,22 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.days:
         since = int((time.time() - args.days * 86400) * 1000)
         trades = [t for t in trades if (t.get("closed_ms") or t.get("created_ms") or 0) >= since]
-    else:
-        since = 0
-    equity = store.equity_series(since_ms=since)
-    s = summarize(trades, equity)
+    s = summarize(trades)
 
     def f(v, suffix="", nd=2):
         return "—" if v is None else f"{v:,.{nd}f}{suffix}"
 
     print("=== 收益概览 ===")
     print(f"平仓笔数 {s['trades']}（盈 {s['wins']} / 亏 {s['losses']}）  胜率 {f(s['win_rate'], '%', 1)}")
-    print(f"净盈亏 {f(s['net_pnl'])} U   收益率 {f(s['return_pct'], '%')}   最大回撤 "
-          f"{f(s['max_drawdown'])} U ({f(s['max_drawdown_pct'], '%')})")
-    print(f"平均盈利 {f(s['avg_win'])}  平均亏损 {f(s['avg_loss'])}  盈亏比 {f(s['payoff_ratio'])}  "
-          f"利润因子 {f(s['profit_factor'])}  平均R {f(s['avg_r'])}")
+    print(f"净盈亏 {f(s['net_pnl'])} U   收益率 {f(s['return_pct'], '%')}   最大回撤（已实现） "
+          f"{f(s['max_drawdown'])} U ({f(s['max_drawdown_pct'], '%')}, {f(s['max_drawdown_r'])}R)")
+    print(f"平均盈利 {f(s['avg_win'])}  平均亏损 {f(s['avg_loss'])}  平均盈/亏 {f(s['payoff_ratio'])}  "
+          f"利润因子 {f(s['profit_factor'])}  平均R {f(s['avg_r'])}  合计R {f(s['total_r'])}")
     print(f"手续费 {f(s['fees'])}  资金费 {f(s['funding'])}")
 
     sigs = {r["id"]: r for r in store._rows("SELECT * FROM signals")}
     q = ai_quality(trades, sigs, list(sigs.values()))
-    for title, key in (("按 AI 交易把握度", "by_confidence"), ("按 AI 估计胜率", "by_estimated_win_rate"),
+    for title, key in (("按策略版本", "by_version"), ("按 AI 交易把握度", "by_confidence"), ("按 AI 估计胜率", "by_estimated_win_rate"),
                        ("按入场方式", "by_entry_type"), ("按方向", "by_direction"),
                        ("按市场周期", "by_cycle"), ("按离场原因", "by_exit_reason")):
         rows = q[key]
@@ -230,7 +227,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         for g in rows:
             print(f"  {g['group']:<14} {g['trades']:>4} 笔  胜率 {g['win_rate']:5.1f}%  "
                   f"净盈亏 {g['net_pnl']:>10,.2f}  平均R {f(g['avg_r'])}")
-    print(f"\n=== 信号漏斗 === 共 {q['signals_total']} 条（下单信号 {q['signals_actionable']}）: "
+    print(f"\n=== 下单信号处理 === 共 {q['signals_total']} 条分析（下单信号 {q['signals_actionable']}）: "
           + ", ".join(f"{k}={v}" for k, v in q["signal_funnel"].items()))
     return 0
 

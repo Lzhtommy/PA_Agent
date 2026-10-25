@@ -216,20 +216,51 @@ class TradeStore:
     def get_signal(self, signal_id: int) -> dict[str, Any] | None:
         return self._row("SELECT * FROM signals WHERE id=?", (signal_id,))
 
-    def list_signals(self, limit: int = 200, offset: int = 0,
-                     symbol: str | None = None) -> list[dict[str, Any]]:
-        where, params = ("WHERE symbol=? ", [symbol]) if symbol else ("", [])
+    @staticmethod
+    def _version_clause(version: str | None) -> tuple[str, list[Any]]:
+        """``version`` is ``"model|prompt_hash"`` (as returned by :meth:`versions`)."""
+        model, _, phash = (version or "").partition("|")
+        return "model=? AND prompt_hash=?", [model, phash]
+
+    def _signal_filter(self, symbol: str | None, actionable: bool,
+                       version: str | None) -> tuple[str, list[Any]]:
+        clauses, params = [], []
+        if symbol:
+            clauses.append("symbol=?")
+            params.append(symbol)
+        if actionable:
+            clauses.append("order_type != 'none'")
+        if version:
+            clause, vparams = self._version_clause(version)
+            clauses.append(clause)
+            params += vparams
+        return ("WHERE " + " AND ".join(clauses) + " " if clauses else ""), params
+
+    def list_signals(self, limit: int = 200, offset: int = 0, symbol: str | None = None,
+                     actionable: bool = False, version: str | None = None) -> list[dict[str, Any]]:
+        where, params = self._signal_filter(symbol, actionable, version)
         return self._rows(
             "SELECT id, signal_uid, created_ms, source, symbol, timeframe, direction, "
             "order_type, entry, stop_loss, tp1, tp2, trade_confidence, estimated_win_rate, "
-            f"status, status_reason, chart_image FROM signals {where}ORDER BY id DESC LIMIT ? OFFSET ?",
+            "status, status_reason, chart_image, model, prompt_hash "
+            f"FROM signals {where}ORDER BY id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
         )
 
-    def count_signals(self, symbol: str | None = None) -> int:
-        if symbol:
-            return self._row("SELECT COUNT(*) AS n FROM signals WHERE symbol=?", (symbol,))["n"]
-        return self._row("SELECT COUNT(*) AS n FROM signals")["n"]
+    def count_signals(self, symbol: str | None = None, actionable: bool = False,
+                      version: str | None = None) -> int:
+        where, params = self._signal_filter(symbol, actionable, version)
+        return self._row(f"SELECT COUNT(*) AS n FROM signals {where}", params)["n"]
+
+    def versions(self) -> list[dict[str, Any]]:
+        """Strategy versions seen in signals, most recent first, with sample sizes."""
+        return self._rows(
+            "SELECT s.model, s.prompt_hash, MIN(s.created_ms) AS first_ms, MAX(s.created_ms) AS last_ms, "
+            "COUNT(*) AS signals, SUM(s.order_type != 'none') AS orders, "
+            "(SELECT COUNT(*) FROM trades t JOIN signals s2 ON s2.id = t.signal_id "
+            " WHERE t.state = 'closed' AND s2.model = s.model AND s2.prompt_hash = s.prompt_hash) AS closed "
+            "FROM signals s GROUP BY s.model, s.prompt_hash ORDER BY last_ms DESC"
+        )
 
     # ── trades ────────────────────────────────────────────────────────────────
 
@@ -261,9 +292,13 @@ class TradeStore:
             )
         return self._rows("SELECT * FROM trades WHERE state IN ('pending','open') ORDER BY id")
 
-    @staticmethod
-    def _trade_filter(states: tuple[str, ...] | None, inst_id: str | None) -> tuple[str, list[Any]]:
+    def _trade_filter(self, states: tuple[str, ...] | None, inst_id: str | None,
+                      version: str | None = None) -> tuple[str, list[Any]]:
         clauses, params = [], []
+        if version:
+            clause, vparams = self._version_clause(version)
+            clauses.append(f"signal_id IN (SELECT id FROM signals WHERE {clause})")
+            params += vparams
         if states:
             clauses.append(f"state IN ({', '.join('?' * len(states))})")
             params += states
@@ -274,15 +309,16 @@ class TradeStore:
 
     def list_trades(
         self, *, states: tuple[str, ...] | None = None, limit: int = 500, offset: int = 0,
-        inst_id: str | None = None,
+        inst_id: str | None = None, version: str | None = None,
     ) -> list[dict[str, Any]]:
-        where, params = self._trade_filter(states, inst_id)
+        where, params = self._trade_filter(states, inst_id, version)
         return self._rows(
             f"SELECT * FROM trades {where}ORDER BY id DESC LIMIT ? OFFSET ?", (*params, limit, offset)
         )
 
-    def count_trades(self, *, states: tuple[str, ...] | None = None, inst_id: str | None = None) -> int:
-        where, params = self._trade_filter(states, inst_id)
+    def count_trades(self, *, states: tuple[str, ...] | None = None, inst_id: str | None = None,
+                     version: str | None = None) -> int:
+        where, params = self._trade_filter(states, inst_id, version)
         return self._row(f"SELECT COUNT(*) AS n FROM trades {where}", params)["n"]
 
     def instruments(self) -> list[str]:

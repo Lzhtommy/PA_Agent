@@ -281,3 +281,58 @@ def test_dashboard_pagination_and_instrument_filter(tmp_path):
     assert [e["message"] for e in r.json()] == ["e1", "e0"]
 
     assert sorted(c.get("/api/instruments").json()) == ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+
+
+def _versioned_store(tmp_path):
+    store = TradeStore(tmp_path / "v.db")
+    now = int(time.time() * 1000)
+    plan = [("deepseek-flash", "legacy", 150.0), ("claude_cli/sonnet", "abcd1234", -120.0),
+            ("claude_cli/sonnet", "abcd1234", -100.0)]
+    for i, (model, phash, pnl) in enumerate(plan):
+        sid = store.insert_signal(dict(signal_uid=f"o{i}", symbol="BTC-USDT-SWAP", timeframe="1h",
+                                       direction="long", order_type="limit", entry=100, stop_loss=98,
+                                       tp1=102, model=model, prompt_hash=phash, created_ms=now + i))
+        store.mark_signal(sid, "processed", f"交易 #{i + 1}")
+        store.insert_trade(dict(signal_id=sid, inst_id="BTC-USDT-SWAP", timeframe="1h",
+                                direction="long", entry_type="limit", state="closed",
+                                risk_amount=100, net_pnl=pnl, equity_at_entry=10_000,
+                                closed_ms=now + i))
+    store.insert_signal(dict(signal_uid="n1", symbol="BTC-USDT-SWAP", timeframe="1h",
+                             order_type="none", model="claude_cli/sonnet", prompt_hash="abcd1234"))
+    return store
+
+
+def test_dashboard_filters_by_strategy_version(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from pa_agent.trading.dashboard import create_app
+
+    c = TestClient(create_app(_versioned_store(tmp_path), demo=True))
+    versions = {v["label"]: v for v in c.get("/api/versions").json()}
+    sonnet = versions["claude_cli/sonnet · abcd1234"]
+    assert sonnet["closed"] == 2 and sonnet["signals"] == 3 and sonnet["orders"] == 2
+    assert versions["deepseek-flash · 旧版本"]["closed"] == 1
+
+    v = "version=" + sonnet["key"]
+    s = c.get(f"/api/overview?{v}").json()["summary"]
+    assert s["trades"] == 2 and s["total_r"] == pytest.approx(-2.2)
+    assert c.get(f"/api/trades?{v}").headers["x-total-count"] == "2"
+    assert c.get(f"/api/signals?{v}").headers["x-total-count"] == "3"
+    assert c.get(f"/api/signals?{v}&actionable=true").headers["x-total-count"] == "2"
+    q = c.get(f"/api/ai-quality?{v}").json()
+    assert [g["group"] for g in q["by_version"]] == ["claude_cli/sonnet · abcd1234"]
+    assert q["signals_total"] == 3 and q["signals_actionable"] == 2
+    assert c.get("/api/overview").json()["summary"]["trades"] == 3
+
+
+def test_summary_drawdown_uses_realised_pnl():
+    from pa_agent.trading.stats import summarize
+
+    trades = [dict(state="closed", net_pnl=p, risk_amount=100, equity_at_entry=10_000, closed_ms=i)
+              for i, p in enumerate([200.0, -150.0, -100.0, 50.0])]
+    s = summarize(trades)
+    assert s["max_drawdown"] == pytest.approx(250.0)          # peak +200 → trough -50
+    assert s["max_drawdown_pct"] == pytest.approx(250 / 10_200 * 100)
+    assert s["max_drawdown_r"] == pytest.approx(2.5)
+    assert s["return_pct"] == pytest.approx(0.0)
