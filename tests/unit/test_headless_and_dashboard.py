@@ -358,3 +358,52 @@ def test_timeframe_is_part_of_strategy_version(tmp_path):
     assert versions[f"claude_cli/sonnet · {phash} · 1h"]["current"] is False
     key_4h = versions[f"claude_cli/sonnet · {phash} · 4h"]["key"]
     assert c.get(f"/api/signals?version={key_4h}").headers["x-total-count"] == "1"
+
+
+def _store_runner(tmp_path, bars, *, trading=True):
+    r = _runner(bars)
+    r.store = TradeStore(tmp_path / "r.db")
+    r.ctx.settings.trading = SimpleNamespace(enabled=trading)
+    return r
+
+
+@pytest.mark.parametrize("minutes_after_close,expected", [(10, 1), (40, 0)])
+def test_restart_catches_up_on_recent_unanalysed_bar(tmp_path, monkeypatch, minutes_after_close, expected):
+    real = int(time.time() * 1000)
+    head = real - real % H - 2 * H
+    monkeypatch.setattr(time, "time", lambda: (head + minutes_after_close * 60_000) / 1000)
+    r = _store_runner(tmp_path, _bars(head))
+    # the bar that closed at `head` has no signal; catch up only within half a bar
+    assert r.poll_once() == expected
+    assert r.analyzed == [head - H] * expected
+    assert r.poll_once() == 0
+
+
+def test_restart_waits_when_bar_already_analysed(tmp_path):
+    now = int(time.time() * 1000)
+    head = now - now % H
+    r = _store_runner(tmp_path, _bars(head))
+    r.store.insert_signal(dict(signal_uid="done", symbol="BTC-USDT-SWAP", timeframe="1h",
+                               order_type="none", created_ms=head + 60_000))
+    assert r.poll_once() == 0 and r.analyzed == []
+
+
+def test_no_catch_up_without_signals(tmp_path):
+    now = int(time.time() * 1000)
+    r = _store_runner(tmp_path, _bars(now - now % H), trading=False)
+    assert r.poll_once() == 0
+
+
+def test_runner_reports_next_analysis_time(tmp_path):
+    import json
+
+    from pa_agent.headless import RUNNER_ACTIVE_KEY
+
+    now = int(time.time() * 1000)
+    head = now - now % H
+    r = _store_runner(tmp_path, _bars(head), trading=False)
+    r.poll_once()
+    r._report()
+    active = json.loads(r.store.get_kv(RUNNER_ACTIVE_KEY))
+    assert active["next_ms"] == head + H   # close of the bar forming now
+    assert active["analyzing"] == ""

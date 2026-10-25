@@ -91,6 +91,7 @@ class HeadlessRunner:
     store: Any = None             # TradeStore: page-editable symbols/timeframe (None = fixed)
     states: dict[str, SymbolState] = field(default_factory=dict)
     _cancel: Any = None
+    _analyzing: str = ""          # symbol being analysed right now (reported to the dashboard)
 
     def __post_init__(self) -> None:
         if not self.bar_count:
@@ -142,8 +143,44 @@ class HeadlessRunner:
             self.apply_config(*cfg)
             self.store.log_event("runner_config",
                                  f"后台分析已切换为 {','.join(self.states) or '（无可用品种）'} · {self.timeframe}")
-        self.store.set_kv(RUNNER_ACTIVE_KEY, json.dumps(
-            {"symbols": list(self.states), "timeframe": self.timeframe, "ts_ms": int(time.time() * 1000)}))
+        self._report()
+
+    def _tf_ms(self) -> int:
+        from pa_agent.data.bar_close_wait import timeframe_to_seconds
+
+        return (timeframe_to_seconds(self.timeframe) or 0) * 1000
+
+    def next_close_ms(self) -> int | None:
+        """When the next analysis is due: the close of the bar after the newest closed one."""
+        tf = self._tf_ms()
+        seen = [st.last_closed_ts for st in self.states.values() if st.last_closed_ts is not None]
+        return min(seen) + 2 * tf if seen and tf else None
+
+    def _report(self) -> None:
+        """Heartbeat for the dashboard: what runs, when it analyses next, what it is doing."""
+        if self.store is None:
+            return
+        self.store.set_kv(RUNNER_ACTIVE_KEY, json.dumps({
+            "symbols": list(self.states), "timeframe": self.timeframe,
+            "ts_ms": int(time.time() * 1000), "next_ms": self.next_close_ms(),
+            "analyzing": self._analyzing,
+        }))
+
+    def _missed_bar(self, symbol: str, closed_ts: int, now_ms: int) -> bool:
+        """At startup (or a timeframe switch): was the newest closed bar left unanalysed?
+
+        True when it closed less than half a bar ago and no signal for this symbol and
+        timeframe was written after its close, e.g. the service restarted right at the
+        close. Needs the trade store and signals enabled (signals are the record).
+        """
+        trading = getattr(self.ctx.settings, "trading", None)
+        tf = self._tf_ms()
+        if self.store is None or not getattr(trading, "enabled", False) or not tf:
+            return False
+        close_ms = closed_ts + tf
+        if now_ms - close_ms > tf / 2:
+            return False
+        return self.store.last_signal_ms(symbol, self.timeframe) < close_ms
 
     # ── orchestration ─────────────────────────────────────────────────────────
 
@@ -181,7 +218,12 @@ class HeadlessRunner:
                 continue
             if st.last_closed_ts is None and not self.run_now:
                 st.last_closed_ts = closed
-                logger.info("%s %s 已就绪，等待下一根K线收盘后开始分析", st.symbol, self.timeframe)
+                if not self._missed_bar(st.symbol, closed, now):
+                    logger.info("%s %s 已就绪，等待下一根K线收盘后开始分析", st.symbol, self.timeframe)
+                    continue
+                logger.info("%s %s 最近收盘的K线还没分析过，立即补分析", st.symbol, self.timeframe)
+                self.analyze(st, bars)
+                ran += 1
                 continue
             if closed == st.last_closed_ts:
                 continue
@@ -212,6 +254,8 @@ class HeadlessRunner:
                 else "完整")
         logger.info("▶ %s %s 开始分析（%s）", st.symbol, self.timeframe, mode)
         self._cancel = CancelToken()
+        self._analyzing = st.symbol
+        self._report()
         started = time.monotonic()
 
         def on_event(ev):
@@ -229,6 +273,8 @@ class HeadlessRunner:
             return None
         finally:
             self._cancel = None
+            self._analyzing = ""
+            self._report()
         st.analyses += 1
         decision = record.stage2_decision or {}
         if not decision:

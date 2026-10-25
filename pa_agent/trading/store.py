@@ -252,6 +252,12 @@ class TradeStore:
         where, params = self._signal_filter(symbol, actionable, version)
         return self._row(f"SELECT COUNT(*) AS n FROM signals {where}", params)["n"]
 
+    def last_signal_ms(self, symbol: str, timeframe: str) -> int:
+        """created_ms of the newest signal for *symbol* on *timeframe* (0 if none)."""
+        row = self._row("SELECT MAX(created_ms) AS ms FROM signals WHERE symbol=? AND timeframe=?",
+                        (symbol, timeframe))
+        return int(row["ms"] or 0)
+
     def versions(self) -> list[dict[str, Any]]:
         """Strategy versions (model, prompt hash, timeframe) seen in signals, most
         recent first, with sample sizes."""

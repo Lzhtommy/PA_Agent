@@ -87,6 +87,8 @@ label.chk { display: inline-flex; gap: 4px; align-items: center; color: var(--mu
   <div class="badges">
     <span id="mode" class="badge">—</span>
     <span id="hb" class="badge">执行器 —</span>
+    <span id="runBadge" class="badge">后台分析 —</span>
+    <span id="lastRun" class="hint"></span>
     <label class="ctl">策略版本 <select id="version"><option value="">全部版本</option></select></label>
     <label class="ctl">统计区间 <select id="range">
       <option value="0">全部</option><option value="1">近 1 天</option>
@@ -548,6 +550,31 @@ async function loadRunner() {
       msg += `　→ 已保存 ${c.symbols.join(", ")} · ${c.timeframe}，等待后台切换（约 10 秒）`;
   }
   $("runStatus").textContent = msg;
+  runBadge();
+}
+
+let lastSignal = null;
+const hhmm = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+function untilText(ms) {
+  const m = Math.max(0, Math.round((ms - Date.now()) / 60000));
+  return m >= 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分后` : `${m} 分钟后`;
+}
+// Header badge: what the background analysis is doing and when it runs next.
+function runBadge() {
+  const r = runnerCfg, a = r && r.active, el = $("runBadge");
+  let text, cls = "";
+  if (!a) [text, cls] = ["后台分析未运行", "bad"];
+  else if (!r.running) [text, cls] = ["后台分析已停止", "bad"];
+  else if (a.analyzing) [text, cls] = [`分析中：${short(a.analyzing)} ${a.timeframe}`, "ok"];
+  else if (!a.next_ms) text = `等待 ${a.timeframe} K线数据`;
+  else if (a.next_ms > Date.now()) text = `下次分析 ${hhmm(a.next_ms)}（${untilText(a.next_ms)}）`;
+  else text = `${a.timeframe} K线已收盘，即将分析`;
+  el.textContent = text;
+  el.className = "badge " + cls;
+  const s = lastSignal;
+  el.title = s ? `上次分析：${ts(s.created_ms)} ${short(s.symbol)} ${s.timeframe} · ` +
+    (s.order_type === "none" ? "不下单" : `${s.direction === "long" ? "做多" : "做空"}${entryLabel[s.order_type]}`) : "";
+  $("lastRun").textContent = s ? "上次分析 " + el.title.replace("上次分析：", "") : "";
 }
 
 $("runSave").onclick = async () => {
@@ -660,6 +687,8 @@ async function refresh() {
     await Promise.all([loadInstFilter(), loadVersions()]);
     const [sigs] = await Promise.all([api("/api/signals?limit=50"), loadOverview(), loadEquity(), loadTrades(),
       loadPnlChart(), loadQuality(), loadSignals(), loadEvents(), loadRunner()]);
+    lastSignal = sigs[0] || null;
+    runBadge();
     const runCfg = runnerCfg && (runnerCfg.config || runnerCfg.active);
     if (!$("klineInst").options.length) $("klineTf").value = runCfg?.timeframe || sigs[0]?.timeframe || "1h";
     klineOptions([...(runCfg?.symbols || []), ...sigs.map((s) => s.symbol)]);

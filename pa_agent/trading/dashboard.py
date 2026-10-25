@@ -219,7 +219,9 @@ def create_app(store: TradeStore, *, demo: bool, token: str = "", chart_root: Pa
 
         cfg = read_runner_config(store)
         active = _loads(store.get_kv(RUNNER_ACTIVE_KEY)) or None
-        running = bool(active and now_ms() - int(active.get("ts_ms") or 0) < 120_000)
+        age = now_ms() - int((active or {}).get("ts_ms") or 0)
+        # one analysis can take several minutes without a heartbeat in between
+        running = bool(active and (age < 120_000 or (active.get("analyzing") and age < 20 * 60_000)))
         return {"config": {"symbols": cfg[0], "timeframe": cfg[1]} if cfg else None,
                 "active": active, "running": running, "timeframes": list(_TF_MAP)}
 
