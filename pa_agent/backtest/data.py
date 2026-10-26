@@ -37,6 +37,21 @@ def _parse_rows(rows: list[list[str]]) -> list[Bar]:
     return out
 
 
+def _with_retry(call: Any, attempts: int = 6) -> Any:
+    """Long downloads hit transient network errors; back off and retry them."""
+    from pa_agent.exchange.okx_rest import OkxNetworkError
+
+    for n in range(attempts):
+        try:
+            return call()
+        except OkxNetworkError as exc:
+            if n == attempts - 1:
+                raise
+            logger.warning("OKX 网络错误，%ds 后重试: %s", 2 ** n, exc)
+            time.sleep(2 ** n)
+    return None
+
+
 def fetch_history(client: Any, inst_id: str, bar: str, start_ms: int, *,
                   before_ms: int | None = None, pause_s: float = 0.12) -> list[Bar]:
     """Closed bars with ``start_ms <= ts < before_ms`` (default: up to now), oldest first.
@@ -47,7 +62,7 @@ def fetch_history(client: Any, inst_id: str, bar: str, start_ms: int, *,
     got: dict[int, Bar] = {}
     cursor = str(before_ms) if before_ms else None
     while True:
-        rows = client.history_candles(inst_id, bar, limit=100, after=cursor)
+        rows = _with_retry(lambda c=cursor: client.history_candles(inst_id, bar, limit=100, after=c))
         if not rows:
             break
         page = _parse_rows(rows)
@@ -109,4 +124,4 @@ def load_bars(inst_id: str, bar: str, start_ms: int, cache_dir: Path, *,
 
 def find_gaps(bars: list[Bar], step_ms: int) -> list[tuple[int, int]]:
     """``(ts_before, ts_after)`` pairs where consecutive bars are more than one step apart."""
-    return [(a.ts, b.ts) for a, b in zip(bars, bars[1:]) if b.ts - a.ts != step_ms]
+    return [(a.ts, b.ts) for a, b in zip(bars, bars[1:], strict=False) if b.ts - a.ts != step_ms]

@@ -121,3 +121,12 @@ def test_portfolio_replaces_pending_and_skips_while_open():
 def test_find_gaps():
     b = [Bar(0, 1, 1, 1, 1, 0), Bar(H4, 1, 1, 1, 1, 0), Bar(3 * H4, 1, 1, 1, 1, 0)]
     assert find_gaps(b, H4) == [(H4, 3 * H4)]
+
+
+def test_ties_flagged_and_favorable_sensitivity():
+    from dataclasses import replace
+    p = PriceUnits(bars(SIGNAL, (100, 101.5, 100.5, 101), (101, 103.5, 98.5, 101)))
+    against = simulate(long_stop(tp2=None), p, FREE)
+    assert against.outcome == "stop" and against.ambiguous
+    favorable = simulate(long_stop(tp2=None), p, replace(FREE, favorable_ties=True))
+    assert favorable.outcome == "tp1" and favorable.r == pytest.approx(1.0)

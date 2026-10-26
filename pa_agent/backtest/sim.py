@@ -21,8 +21,8 @@ after TP1, a unit that also trades back to breakeven exits the rest at breakeven
 from __future__ import annotations
 
 from bisect import bisect_left
-from dataclasses import dataclass, field, replace
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from pa_agent.backtest.data import Bar
 from pa_agent.trading.risk import RiskConfig, RiskRejected, build_entry_plan
@@ -50,6 +50,7 @@ class SimConfig:
     breakeven: bool = True
     expiry_bars: int = 3
     max_hold_bars: int = 180           # safety valve; closed at that bar's close
+    favorable_ties: bool = False       # sensitivity check only: resolve same-unit ties FOR the trade
     risk: RiskConfig = field(default_factory=lambda: RiskConfig(
         min_reward_risk=1.0, min_stop_distance_pct=0.3, max_stop_distance_pct=8.0))
 
@@ -68,6 +69,7 @@ class Result:
     exit_idx: int | None = None
     r: float | None = None    # net R, None when never filled
     fee_r: float = 0.0        # fees + slippage, in R
+    ambiguous: bool = False   # a same-unit tie was resolved against the trade
 
     @property
     def filled(self) -> bool:
@@ -99,9 +101,10 @@ class PriceUnits:
         return [bar]
 
 
-def simulate(order: Order, prices: PriceUnits, cfg: SimConfig = SimConfig(), *,
+def simulate(order: Order, prices: PriceUnits, cfg: SimConfig | None = None, *,
              cancel_idx: int | None = None) -> Result:
     """Simulate one order. ``cancel_idx``: cancel a still-unfilled entry at that bar's open."""
+    cfg = cfg or SimConfig()
     bars = prices.bars
     i = order.signal_idx
     if i + 1 >= len(bars):
@@ -206,11 +209,17 @@ def simulate(order: Order, prices: PriceUnits, cfg: SimConfig = SimConfig(), *,
             fill_unit_now = j == k and u_i == fill_unit
             if not fill_unit_now and (u.open - stop) * sign <= 0:        # gap through the stop
                 return exit_stop(j, u.open)
-            if ((u.low if sign > 0 else u.high) - stop) * sign <= 0:
-                return exit_stop(j, stop)
-            if fill_unit_now:
-                continue                                                  # no profit in the fill unit
             best = u.high if sign > 0 else u.low
+            if ((u.low if sign > 0 else u.high) - stop) * sign <= 0:
+                target = plan.tp2 if tp1_done else plan.tp1
+                both = target is not None and (best - target) * sign >= 0
+                res.ambiguous = res.ambiguous or both                     # stop and target in one unit
+                if not (both and cfg.favorable_ties and not fill_unit_now):
+                    return exit_stop(j, stop)
+            if fill_unit_now:
+                if (best - plan.tp1) * sign >= 0:
+                    res.ambiguous = True                                  # target touched in the fill unit
+                continue                                                  # no profit in the fill unit
             if not tp1_done and (best - plan.tp1) * sign >= 0:
                 px = u.open if (u.open - plan.tp1) * sign >= 0 else plan.tp1
                 if not has_tp2:
@@ -220,7 +229,8 @@ def simulate(order: Order, prices: PriceUnits, cfg: SimConfig = SimConfig(), *,
                 tp1_done = True
                 if cfg.breakeven:
                     stop = fill_px
-                    if ((u.low if sign > 0 else u.high) - stop) * sign <= 0:
+                    if not cfg.favorable_ties and ((u.low if sign > 0 else u.high) - stop) * sign <= 0:
+                        res.ambiguous = True
                         return exit_stop(j, stop)                         # tie → breakeven first
             if tp1_done and has_tp2 and (best - plan.tp2) * sign >= 0:
                 px = u.open if (u.open - plan.tp2) * sign >= 0 else plan.tp2
@@ -244,7 +254,7 @@ def _pending_at(res: Result, s: int) -> bool:
     return res.outcome == "open"
 
 
-def run_portfolio(orders: Sequence[Order], prices: PriceUnits, cfg: SimConfig = SimConfig()) -> list[Result]:
+def run_portfolio(orders: Sequence[Order], prices: PriceUnits, cfg: SimConfig | None = None) -> list[Result]:
     """Live-executor interplay for one instrument: one trade at a time, a new signal
     replaces a still-resting entry, signals while a position is open are skipped."""
     out: list[Result] = []
@@ -264,6 +274,3 @@ def run_portfolio(orders: Sequence[Order], prices: PriceUnits, cfg: SimConfig = 
             active = len(out) - 1
     return out
 
-
-def with_fees(cfg: SimConfig, **kw) -> SimConfig:
-    return replace(cfg, **kw)

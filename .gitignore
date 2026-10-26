@@ -114,3 +114,5 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 /research/okx_backtest/data/
+/research/okx_backtest/data_live/
+/research/okx_backtest/data_demo/
