@@ -404,7 +404,7 @@ async function loadPnlChart() {
       label: (c) => { const p = pts[c.dataIndex]; return [`本笔 ${p.R > 0 ? "+" : ""}${p.R.toFixed(2)}R（${num(p.r.net_pnl)} USDT）`, `累计 ${p.acc.toFixed(2)}R`]; },
     } } },
     scales: { x: { ticks: { color: css("--muted"), maxTicksLimit: 12 }, grid: { color: css("--line") } },
-              y: { ticks: { color: css("--muted"), callback: (v) => v + "R" }, grid: { color: css("--line") } } } } });
+              y: { ticks: { color: css("--muted"), callback: (v) => +v.toFixed(2) + "R" }, grid: { color: css("--line") } } } } });
 }
 
 async function loadTrades() {
